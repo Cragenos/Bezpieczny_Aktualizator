@@ -1,0 +1,173 @@
+﻿BEZPIECZNY AKTUALIZATOR - INSTRUKCJA INSTALACJI
+================================================
+
+Zawartość paczki
+----------------
+  Instaluj.cmd          - uruchom, aby zainstalować (poprosi o uprawnienia administratora)
+  Install.ps1           - skrypt instalatora (podpisany)
+  app\                  - aplikacja (BezpiecznyAktualizator.exe, podpisana) i deinstalator
+  dotnet\               - oficjalny instalator Microsoft .NET Desktop Runtime (podpis Microsoft)
+  cert\                 - publiczny certyfikat wydawcy (.cer), którym podpisano aplikację
+  runtime.json          - wersja i suma SHA512 instalatora .NET opublikowana przez Microsoft
+  SHA256SUMS.txt        - sumy kontrolne wszystkich plików paczki
+
+Osobny instalator MSI (budowany przez Build-Package.ps1):
+  BezpiecznyAktualizator-<wersja>-win-x64.msi - samodzielna aplikacja, podpisana; nie wymaga .NET
+  plik .msi.sha256       - suma SHA256 instalatora MSI
+
+Instalacja
+----------
+1. Rozpakuj całe archiwum ZIP do dowolnego folderu.
+2. Kliknij dwukrotnie Instaluj.cmd i zatwierdź okno UAC.
+3. Instalator:
+   - sprawdza sumy SHA256 wszystkich plików,
+   - sprawdza podpis aplikacji i podpis Microsoft instalatora .NET (oraz jego SHA512),
+   - instaluje .NET Desktop Runtime, jeśli brakuje go na komputerze,
+   - pyta, czy dodać certyfikat wydawcy do zaufanych (tylko certyfikat własny / self-signed),
+   - kopiuje aplikację do "C:\Program Files\Bezpieczny Aktualizator",
+   - tworzy skrót w menu Start i wpis w "Aplikacje i funkcje".
+
+Opcje (z wiersza poleceń):
+  Instaluj.cmd -VerifyOnly              tylko weryfikacja paczki, bez instalacji
+  Instaluj.cmd -TrustCertificate Yes    dodaj certyfikat bez pytania (No - pomiń)
+  Instaluj.cmd -DesktopShortcut         dodatkowo skrót na pulpicie
+
+Odinstalowanie
+--------------
+Ustawienia > Aplikacje > Bezpieczny Aktualizator > Odinstaluj
+(usuwa aplikację, skróty i certyfikat wydawcy z magazynów zaufanych; .NET pozostaje).
+
+Dziennik zdarzeń (syslog)
+-------------------------
+Działania aplikacji są zapisywane w formacie syslog (RFC 5424) w pliku:
+  %LOCALAPPDATA%\BezpiecznyAktualizator\Logs\BezpiecznyAktualizator.log
+Przycisk "Dziennik zdarzeń (syslog)" w oknie programu pokazuje ten plik w Eksploratorze.
+Dziennik i ustawienia (%APPDATA%\BezpiecznyAktualizator) pozostają po odinstalowaniu.
+
+Instalator MSI (alternatywa)
+----------------------------
+Uruchom osobny plik BezpiecznyAktualizator-<wersja>-win-x64.msi i zatwierdź UAC.
+Instaluje program w Program Files, tworzy skrót w menu Start i dodaje wpis w „Aplikacje i funkcje”.
+MSI zawiera środowisko .NET i obsługuje aktualizacje główne. Odinstalowanie: Ustawienia > Aplikacje.
+Ustawienia użytkownika pozostają po odinstalowaniu. MSI nie dodaje certyfikatu do zaufanych.
+
+Sprawdzanie plików kontrolnych
+------------------------------
+Gdy opcja "Sprawdzaj pliki kontrolne przed instalacją" jest włączona (domyślnie),
+program przed każdą aktualizacją pobiera instalator i sprawdza:
+  - sumę SHA256 z manifestu winget,
+  - pliki kontrolne wydawcy, o ile są dostępne (GitHub Releases, *.sha256, SHA256SUMS, checksums.txt),
+  - podpis cyfrowy Authenticode.
+Jeśli suma jest niezgodna albo podpis jest nieprawidłowy, instalacja tego programu jest wstrzymywana.
+
+Automatyczne sprawdzanie wersji
+-------------------------------
+Po uruchomieniu program sam sprawdza w tle nowsze wersje zainstalowanych programów
+(winget / Microsoft Store) i sterowników (Windows Update). Wynik jest wyświetlany na pasku nad zakładkami.
+Opcje można zmienić przyciskiem "Sprawdzanie przy starcie" (tam jest też polecenie "Sprawdź teraz").
+
+Ikona zasobnika i powiadomienia
+-------------------------------
+Minimalizacja lub zamknięcie głównego okna ukrywa program w zasobniku systemowym, ale go nie kończy.
+Dwukrotne kliknięcie ikony przywraca okno; menu ikony pozwala sprawdzić aktualizację samego programu
+lub zakończyć działanie. Dymek powiadamia o dostępnej aktualizacji.
+
+Aktualizacja samego programu (MSI)
+---------------------------------
+Program pobiera listę stabilnych wydań z GitHub Releases: Cragenos/Bezpieczny_Aktualizator.
+Repozytorium można zmienić we właściwości UpdateRepository w Directory.Build.props; bez ustawienia
+automatyczne sprawdzanie jest wyłączone. Aby aktualizacje były dostępne, należy opublikować stabilne wydanie.
+MSI musi mieć nazwę BezpiecznyAktualizator-<wersja>-win-x64.msi; zalecane jest dodanie obok pliku
+<nazwa>.sha256. Przed uruchomieniem programu instalatora aplikacja sprawdza SHA-256 oraz podpis
+Authenticode i odcisk certyfikatu wydawcy. Instalacja wymaga potwierdzenia UAC. Automatyczna aktualizacja
+jest dostępna dla instalacji MSI; paczki ZIP/skryptowe i przenośne nie są podmieniane automatycznie.
+Kontrola wydania łączy się z publicznym GitHub API i nie wysyła inwentaryzacji komputera.
+
+Motyw okna (jasny / ciemny)
+---------------------------
+Lista "Motyw" w nagłówku okna (ikona słońca): Systemowy (zgodnie z Windows), Jasny lub Ciemny.
+Zmiana działa od razu i jest zapamiętywana.
+
+Ciche aktualizacje podczas bezczynności (Harmonogram zadań)
+-----------------------------------------------------------
+"Sprawdzanie przy starcie" > "Harmonogram cichych aktualizacji...":
+program może sam sprawdzać i instalować aktualizacje, gdy komputer jest bezczynny
+(użytkownik zalogowany, zasilanie z sieci). Instalowane są tylko pakiety ze źródeł o poziomie
+zaufania wymaganym przez zasady aktualizacji, których instalator przeszedł weryfikację sumy SHA256, podpisu
+i skanowanie programem Microsoft Defender.
+Utworzenie zadania wymaga jednorazowego potwierdzenia UAC. Wynik pojawia się po następnym
+otwarciu programu i w dzienniku zdarzeń. Deinstalator usuwa zadanie.
+
+Zasady aktualizacji
+-------------------
+Przycisk "Zasady" (lub "Sprawdzanie przy starcie" > "Zasady aktualizacji..."). Zasady obowiązują
+przy aktualizacjach z okna programu i w harmonogramie:
+  - Wykluczone programy  - nigdy nie są aktualizowane,
+  - Wstrzymane wersje    - program zostaje na wersji: puste pole = bez aktualizacji,
+                           "24.*" = tylko aktualizacje w gałęzi 24, "24.8.3" = tylko ta wersja,
+                           "Do dnia" (RRRR-MM-DD) = koniec wstrzymania,
+  - Zaufane źródła       - automatycznie instalowane są tylko źródła o zaufaniu Wysokim
+                           (lub Wysokim/średnim); opcjonalnie to samo dotyczy ręcznych aktualizacji.
+Kolumna "Zasada" i menu pod prawym przyciskiem myszy (Wyklucz / Wstrzymaj / Usuń zasadę).
+Administrator może narzucić zasady wszystkim użytkownikom w pliku
+%ProgramData%\BezpiecznyAktualizator\policies.json (format jak w "Eksportuj..."); tych reguł
+nie da się zmienić w programie, a obowiązuje zawsze ostrzejsze ustawienie zaufania.
+
+Podatności (CVE) i wsparcie (EOL)
+---------------------------------
+Przycisk "Sprawdź podatności i wsparcie" sprawdza programy w bazie podatności NVD (NIST)
+oraz w serwisie endoflife.date. Wynik jest w kolumnie "Ryzyko":
+  - PILNE (czerwony wiersz)       - zainstalowana wersja ma znane luki CVE (KEV = aktywnie wykorzystywane),
+  - Nieobsługiwany (żółty wiersz) - wersja nie dostaje już poprawek bezpieczeństwa (EOL),
+  - Porzucony                     - projekt jest zarchiwizowany lub nieaktywny od ponad 3 lat.
+Filtr "Tylko pilne i nieobsługiwane" pokazuje tylko takie programy.
+Pierwsze sprawdzenie wszystkich programów może potrwać kilkanaście minut (limit NVD: 5 zapytań / 30 s).
+Bezpłatny klucz API NVD (https://nvd.nist.gov/developers/request-an-api-key) przyspiesza
+sprawdzanie 10 razy - ustaw zmienną środowiskową NVD_API_KEY. Wyniki są pamiętane przez 24 godz.
+
+Skanowanie instalatora programem Microsoft Defender
+---------------------------------------------------
+Przy włączonym sprawdzaniu plików kontrolnych pobrany instalator jest skanowany programem
+Microsoft Defender (MpCmdRun). Wykrycie zagrożenia blokuje instalację. Gdy Defender jest
+niedostępny (np. działa inny antywirus), instalacja jest wstrzymywana: w oknie programu trzeba
+wyraźnie potwierdzić instalację bez skanowania (domyślnie „Nie”), a harmonogram pomija taki
+pakiet, chyba że w jego ustawieniach zaznaczono „Instaluj także wtedy, gdy Microsoft Defender
+jest niedostępny”. Wyłączenie sprawdzania plików kontrolnych wyłącza też skanowanie i wymaga
+potwierdzenia.
+
+Historia i wycofanie aktualizacji
+---------------------------------
+Każda aktualizacja jest zapisywana w historii (%LOCALAPPDATA%\BezpiecznyAktualizator\update-history.json).
+Przycisk "Historia i wycofanie" pozwala przywrócić poprzednią wersję programu, o ile jest
+dostępna w repozytorium winget. Poprzednia wersja przed instalacją jest weryfikowana tak samo
+jak każda aktualizacja. Po wycofaniu program proponuje wstrzymanie na przywróconej wersji.
+
+O programie
+-----------
+Przycisk "i" w prawym górnym rogu okna: autor (Cragenos), wersja, prawa autorskie, stan podpisu
+cyfrowego i ochrony pliku programu oraz lista wykorzystanych projektów open source.
+"Kopiuj informacje" kopiuje te dane do schowka (np. do zgłoszenia błędu).
+
+Ochrona przed inżynierią wsteczną i modyfikacją
+-----------------------------------------------
+Program z paczki jest wydaniem chronionym:
+  - kod jest zaciemniony (Obfuscar): nazwy wewnętrznych klas, metod i pól są zastąpione
+    nieczytelnymi znakami, a napisy w kodzie są zaszyfrowane,
+  - przy każdym starcie program sprawdza swój podpis cyfrowy i odcisk certyfikatu wydawcy;
+    plik zmieniony po podpisaniu lub podpisany innym certyfikatem nie uruchomi się
+    (wpis INTEGRITY w dzienniku zdarzeń, kod wyjścia 3),
+  - program kończy działanie po wykryciu podłączonego debugera,
+  - plik nie zawiera symboli debugowania.
+Żadna ochrona programów .NET nie jest absolutna - utrudnia analizę i modyfikację, ale nie
+uniemożliwia ich zdeterminowanemu atakującemu.
+
+Wersja przenośna
+----------------
+Osobna paczka BezpiecznyAktualizator-<wersja>-portable-win-x64.zip zawiera jeden plik .exe
+z wbudowanym środowiskiem .NET - bez instalacji, wystarczy rozpakować i uruchomić.
+
+Weryfikacja ręczna
+------------------
+Podpis:   PPM na BezpiecznyAktualizator.exe > Właściwości > Podpisy cyfrowe
+          lub w PowerShell: Get-AuthenticodeSignature .\app\BezpiecznyAktualizator.exe
+Odcisk certyfikatu wydawcy porównaj z tym opublikowanym przez autora paczki.

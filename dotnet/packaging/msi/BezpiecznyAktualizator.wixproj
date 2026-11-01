@@ -1,0 +1,9 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">2.1.0</PackageVersion>
+    <OutputName>BezpiecznyAktualizator-$(PackageVersion)-win-x64</OutputName>
+    <DefineConstants>$(DefineConstants);PackageVersion=$(PackageVersion);AppExePath=$(AppExePath);CertificatePath=$(CertificatePath)</DefineConstants>
+  </PropertyGroup>
+</Project>

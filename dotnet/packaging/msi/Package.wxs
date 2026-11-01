@@ -1,0 +1,67 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Bezpieczny Aktualizator"
+           Manufacturer="Cragenos"
+           Version="$(var.PackageVersion)"
+           UpgradeCode="{7E4B86E3-1DC1-4E9E-8D41-3AFCBBF6B010}"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Language="1045">
+    <MajorUpgrade DowngradeErrorMessage="Nowsza wersja Bezpiecznego Aktualizatora jest już zainstalowana." />
+    <MediaTemplate EmbedCab="yes" />
+    <Feature Id="Application" Title="Bezpieczny Aktualizator" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentGroupRef Id="ApplicationShortcuts" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Bezpieczny Aktualizator" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="Bezpieczny Aktualizator" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="*">
+        <File Id="AppExe" Source="$(var.AppExePath)" KeyPath="yes" />
+      </Component>
+      <Component Id="PublisherCertificate" Guid="*">
+        <File Id="PublisherCert" Source="$(var.CertificatePath)" KeyPath="yes" />
+      </Component>
+      <Component Id="InstallMetadata" Guid="*">
+        <RegistryValue Root="HKLM"
+                       Key="Software\Cragenos\BezpiecznyAktualizator"
+                       Name="UpdateChannel"
+                       Type="string"
+                       Value="msi"
+                       KeyPath="yes" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\Cragenos\BezpiecznyAktualizator"
+                       Name="InstallLocation"
+                       Type="string"
+                       Value="[INSTALLFOLDER]" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="ApplicationShortcuts" Directory="AppMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="Bezpieczny Aktualizator"
+                  Target="[INSTALLFOLDER]BezpiecznyAktualizator.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\Cragenos\BezpiecznyAktualizator"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+  </Fragment>
+</Wix>

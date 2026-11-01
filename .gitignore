@@ -1,0 +1,33 @@
+# Build and publish outputs
+**/bin/
+**/obj/
+dotnet/dist/
+dotnet/publish/
+
+# Python and IDE caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local data and credentials
+raport_*.csv
+raport_*.json
+*.log
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+*.pem
+*.snk
+
+# Windows metadata
+Thumbs.db
+desktop.ini

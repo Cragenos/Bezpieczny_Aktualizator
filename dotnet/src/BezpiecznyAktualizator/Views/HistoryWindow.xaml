@@ -1,0 +1,32 @@
+<Window x:Class="BezpiecznyAktualizator.Views.HistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="clr-namespace:BezpiecznyAktualizator.Services"
+        Title="{l:Tr 'Historia aktualizacji'}"
+        Width="900" Height="480" MinWidth="560" MinHeight="300"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap"
+                   Text="{l:Tr 'Przed każdą aktualizacją zapamiętywana jest poprzednia wersja programu. Wycofanie instaluje tę wersję ponownie z repozytorium winget (po weryfikacji instalatora), o ile jest w nim nadal dostępna.'}" />
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0" LastChildFill="False">
+            <TextBlock x:Name="EmptyLabel" Text="{l:Tr 'Brak zapisanych aktualizacji.'}" VerticalAlignment="Center"
+                       Visibility="Collapsed" />
+            <Button DockPanel.Dock="Right" Content="{l:Tr 'Zamknij'}" Padding="12,4" IsCancel="True" />
+            <Button x:Name="RollbackButton" DockPanel.Dock="Right" Content="{l:Tr 'Wycofaj do poprzedniej wersji'}"
+                    Style="{DynamicResource AccentButtonStyle}" Padding="10,4" Margin="0,0,6,0" IsEnabled="False"
+                    Click="Rollback_Click" />
+        </DockPanel>
+        <DataGrid x:Name="Records" Style="{StaticResource Grid}" SelectionMode="Single"
+                  SelectionChanged="Records_SelectionChanged" MouseDoubleClick="Records_DoubleClick">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="{l:Tr 'Data'}" Binding="{Binding TimeDisplay}" Width="140" />
+                <DataGridTextColumn Header="{l:Tr 'Nazwa'}" Binding="{Binding Record.Name}" Width="2*" MinWidth="160" />
+                <DataGridTextColumn Header="{l:Tr 'Poprzednia wersja'}" Binding="{Binding Record.FromVersion}" Width="120" />
+                <DataGridTextColumn Header="{l:Tr 'Nowa wersja'}" Binding="{Binding Record.ToVersion}" Width="120" />
+                <DataGridTextColumn Header="{l:Tr 'Rodzaj'}" Binding="{Binding KindDisplay}" Width="150" />
+                <DataGridTextColumn Header="{l:Tr 'Status'}" Binding="{Binding StatusDisplay}" Width="110" />
+                <DataGridTextColumn Header="{l:Tr 'Identyfikator pakietu'}" Binding="{Binding Record.WingetId}" Width="*" MinWidth="140" />
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

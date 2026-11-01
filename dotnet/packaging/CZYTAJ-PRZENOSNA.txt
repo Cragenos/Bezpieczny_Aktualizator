@@ -1,0 +1,42 @@
+﻿BEZPIECZNY AKTUALIZATOR - WERSJA PRZENOŚNA
+==========================================
+
+Autor: Cragenos
+
+Zawartość paczki
+----------------
+  BezpiecznyAktualizator.exe  - gotowy do uruchomienia program (jeden plik, podpisany cyfrowo,
+                                z wbudowanym środowiskiem .NET - nie wymaga instalacji ani .NET)
+  cert\                       - publiczny certyfikat wydawcy (.cer), którym podpisano program
+  INSTRUKCJA.txt              - opis funkcji programu
+  SHA256SUMS.txt              - sumy kontrolne plików paczki
+
+Uruchomienie
+------------
+1. Rozpakuj archiwum ZIP do dowolnego folderu (np. na pendrive lub do C:\Narzędzia).
+2. Uruchom BezpiecznyAktualizator.exe.
+   Pierwsze uruchomienie trwa kilka sekund dłużej (rozpakowanie bibliotek środowiska .NET
+   do folderu tymczasowego).
+3. Instalacja aktualizacji programów i sterowników wymaga potwierdzenia UAC.
+
+Ustawienia i dziennik zdarzeń są zapisywane w profilu użytkownika:
+  %APPDATA%\BezpiecznyAktualizator          - ustawienia i zasady aktualizacji
+  %LOCALAPPDATA%\BezpiecznyAktualizator     - dziennik (syslog), historia aktualizacji, pamięć podręczna
+Harmonogram cichych aktualizacji uruchamia program z bieżącej lokalizacji - po przeniesieniu
+pliku .exe utwórz harmonogram ponownie.
+
+Ochrona programu
+----------------
+Program jest wydaniem chronionym: kod jest zaciemniony, napisy zaszyfrowane, a przy starcie
+program sprawdza swój podpis cyfrowy i odcisk certyfikatu wydawcy oraz obecność debugera.
+Zmieniony (lub niepodpisany ponownie) plik nie uruchomi się - pobierz wtedy paczkę ponownie
+z zaufanego źródła. Szczegóły: okno "O programie" (przycisk "i" w nagłówku okna).
+
+Weryfikacja ręczna
+------------------
+Suma:     Get-FileHash .\BezpiecznyAktualizator.exe   (porównaj z SHA256SUMS.txt)
+Podpis:   PPM na BezpiecznyAktualizator.exe > Właściwości > Podpisy cyfrowe
+          lub w PowerShell: Get-AuthenticodeSignature .\BezpiecznyAktualizator.exe
+Certyfikat jest własny (self-signed), więc Windows pokazuje go jako niezaufany, dopóki nie
+zostanie dodany do zaufanych (np. przez instalator pełnej paczki). Odcisk certyfikatu porównaj
+z tym opublikowanym przez autora.

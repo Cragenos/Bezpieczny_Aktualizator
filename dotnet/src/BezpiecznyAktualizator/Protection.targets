@@ -1,0 +1,68 @@
+<Project>
+  <!--
+    Wydanie chronione (dotnet publish -p:Protect=true [-p:SignerThumbprint=<odcisk>]):
+      - zaciemnianie kodu Obfuscar (MIT) obu zestawów przed spakowaniem w pojedynczy plik:
+        zmiana nazw prywatnych i wewnętrznych typów, metod, pól i właściwości, szyfrowanie napisów;
+        nazwy publiczne zostają, bo korzystają z nich powiązania WPF (XAML) i serializacja JSON,
+      - stała PROTECTED: kontrola integralności (podpis Authenticode i odcisk certyfikatu) oraz wykrywanie debugera,
+      - brak symboli debugowania, kompresja zestawów w pliku .exe (wersja samodzielna).
+    Plik mapowania nazw (do odczytu stosów wywołań) zostaje w obj\...\obfuscar\out\Mapping.txt.
+  -->
+  <PropertyGroup Condition="'$(Protect)' == 'true'">
+    <DefineConstants>$(DefineConstants);PROTECTED</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Protect)' == 'true' and '$(SelfContained)' == 'true' and '$(PublishSingleFile)' == 'true'">
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(Protect)' == 'true' and '$(SignerThumbprint)' != ''">
+    <AssemblyMetadata Include="SignerThumbprint" Value="$(SignerThumbprint)" />
+  </ItemGroup>
+
+  <Target Name="ObfuscateForPublish" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(Protect)' == 'true'">
+    <PropertyGroup>
+      <_ObfDir>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)obfuscar</_ObfDir>
+      <_ObfConfig>$(_ObfDir)\obfuscar.xml</_ObfConfig>
+    </PropertyGroup>
+    <ItemGroup>
+      <_ObfInput Include="@(ResolvedFileToPublish)"
+                 Condition="'%(Filename)%(Extension)' == '$(AssemblyName).dll' or '%(Filename)%(Extension)' == 'BezpiecznyAktualizator.Core.dll'" />
+      <_ObfSearchDir Include="@(ReferencePath->'%(RootDir)%(Directory)'->TrimEnd('\'))" />
+      <_ObfSearchUnique Include="@(_ObfSearchDir->Distinct())" />
+    </ItemGroup>
+    <Error Condition="'@(_ObfInput->Count())' != '2'"
+           Text="Zaciemnianie: oczekiwano 2 zestawów do zaciemnienia, znaleziono: @(_ObfInput->'%(Filename)%(Extension)')." />
+    <Error Condition="!Exists('$(Obfuscar)')" Text="Nie znaleziono Obfuscar.Console.exe (pakiet NuGet Obfuscar)." />
+
+    <RemoveDir Directories="$(_ObfDir)" />
+    <Copy SourceFiles="@(_ObfInput)" DestinationFolder="$(_ObfDir)\in" />
+    <ItemGroup>
+      <_ObfLine Include="&lt;?xml version='1.0'?&gt;" />
+      <_ObfLine Include="&lt;Obfuscator&gt;" />
+      <_ObfLine Include="  &lt;Var name='InPath' value='$(_ObfDir)\in' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='OutPath' value='$(_ObfDir)\out' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='KeepPublicApi' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='HidePrivateApi' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='RenameProperties' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='RenameEvents' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='RenameFields' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='HideStrings' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='UseUnicodeNames' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='ReuseNames' value='true' /&gt;" />
+      <_ObfLine Include="  &lt;Var name='SuppressIldasm' value='true' /&gt;" />
+      <_ObfLine Include="@(_ObfSearchUnique->'  &lt;AssemblySearchPath path=&quot;%(Identity)&quot; /&gt;')" />
+      <_ObfLine Include="  &lt;Module file='$(_ObfDir)\in\$(AssemblyName).dll' /&gt;" />
+      <_ObfLine Include="  &lt;Module file='$(_ObfDir)\in\BezpiecznyAktualizator.Core.dll' /&gt;" />
+      <_ObfLine Include="&lt;/Obfuscator&gt;" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(_ObfConfig)" Lines="@(_ObfLine)" Overwrite="true" />
+    <Exec Command="&quot;$(Obfuscar)&quot; &quot;$(_ObfConfig)&quot;" StandardOutputImportance="low" />
+    <Error Condition="!Exists('$(_ObfDir)\out\$(AssemblyName).dll') or !Exists('$(_ObfDir)\out\BezpiecznyAktualizator.Core.dll')"
+           Text="Zaciemnianie nie utworzyło zestawów wyjściowych." />
+
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(_ObfInput)" />
+      <ResolvedFileToPublish Include="@(_ObfInput->'$(_ObfDir)\out\%(Filename)%(Extension)')" />
+    </ItemGroup>
+    <Message Importance="high" Text="Zaciemniono: @(_ObfInput->'%(Filename)%(Extension)', ', ')" />
+  </Target>
+</Project>

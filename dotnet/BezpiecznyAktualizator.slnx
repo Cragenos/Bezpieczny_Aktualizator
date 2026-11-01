@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BezpiecznyAktualizator.Core/BezpiecznyAktualizator.Core.csproj" />
+    <Project Path="src/BezpiecznyAktualizator/BezpiecznyAktualizator.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BezpiecznyAktualizator.Tests/BezpiecznyAktualizator.Tests.csproj" />
+  </Folder>
+</Solution>

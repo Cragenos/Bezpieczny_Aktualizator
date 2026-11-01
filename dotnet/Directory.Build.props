@@ -1,0 +1,20 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Version>2.1.0</Version>
+    <!-- Public GitHub owner/repository used for in-app updates. -->
+    <UpdateRepository>Cragenos/Bezpieczny_Aktualizator</UpdateRepository>
+    <Authors>Cragenos</Authors>
+    <Company>Cragenos</Company>
+    <Product>Bezpieczny Aktualizator</Product>
+    <Copyright>© 2026 Cragenos</Copyright>
+  </PropertyGroup>
+  <!-- Wydanie chronione (-p:Protect=true, zob. src\BezpiecznyAktualizator\Protection.targets): bez symboli debugowania. -->
+  <PropertyGroup Condition="'$(Protect)' == 'true'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+</Project>

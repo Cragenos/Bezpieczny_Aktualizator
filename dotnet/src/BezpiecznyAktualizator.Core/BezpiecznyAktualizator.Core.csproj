@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="10.0.14" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BezpiecznyAktualizator.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Localization\Strings\*.json" LogicalName="Strings.%(Filename).json" />
+  </ItemGroup>
+</Project>
