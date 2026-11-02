@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Nodes;
 using BezpiecznyAktualizator.Core.Updates;
@@ -9,6 +10,15 @@ namespace BezpiecznyAktualizator.Tests;
 
 public class OfflineUpdatePackageTests
 {
+    [Fact]
+    public void MachineRootTestCertificatesRequireAnExplicitHostedRunnerOptIn()
+    {
+        Assert.Equal(StoreLocation.CurrentUser, OfflinePackageTestSigner.SelectRootStore(null, "github-hosted"));
+        Assert.Equal(StoreLocation.LocalMachine, OfflinePackageTestSigner.SelectRootStore("1", "github-hosted"));
+        Assert.Throws<InvalidOperationException>(() => OfflinePackageTestSigner.SelectRootStore("1", "self-hosted"));
+        Assert.Throws<InvalidOperationException>(() => OfflinePackageTestSigner.SelectRootStore("unexpected", "github-hosted"));
+    }
+
     [Fact]
     public async Task PackageContainsOrderedFilesHashesInstallerAndInformationalCves()
     {

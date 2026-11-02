@@ -50,9 +50,11 @@ dotnet run --project src\BezpiecznyAktualizator
 ## Testy
 
 ```powershell
-dotnet test --filter "Category!=Live"   # testy jednostkowe (bez dostępu do systemu i sieci)
+dotnet test --filter "Category!=Live&Category!=VmIntegration"   # testy offline
 dotnet test --filter "Category=Live"    # testy na żywym systemie: rejestr, WMI, winget, Windows Update
 ```
+
+Testy paczek offline tworzą krótkotrwały certyfikat w magazynie bieżącego użytkownika i tymczasowo dodają go do zaufanych wydawców oraz urzędów głównych. Przy normalnym zakończeniu usuwają utworzony certyfikat; po przerwaniu procesu może być konieczne ręczne usunięcie go z tych magazynów. Uruchamiaj je w odizolowanym środowisku testowym, nie na komputerze produkcyjnym. Na jednorazowej maszynie GitHub-hosted CI może jawnie wybrać magazyn główny komputera, aby uniknąć ukrytego monitu zaufania; test odrzuca tę opcję na innych runnerach.
 
 GitHub Actions uruchamia testy Python, kompilację i testy .NET oraz izolowany test MSI: instalację, aktualizację główną i odinstalowanie. Test zamknięcia pliku po weryfikacji oraz błędów pobierania działa bez dostępu do sieci. Osobny, ręczny workflow dla dedykowanej maszyny Windows sprawdza uruchomienie zaufanego WinGet i skan katalogu Windows Update bez instalowania aktualizacji. Przywracanie zależności w CI kończy się błędem, jeśli audyt NuGet zgłosi podatność (w tym w zależnościach przechodnich) lub nie może pobrać danych audytu. Każde uruchomienie tworzy SBOM CycloneDX JSON dla projektów produkcyjnych; na opublikowanym wydaniu plik jest dołączany do GitHub Release. Generator jest przypięty do wersji 6.3.1.
 

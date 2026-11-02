@@ -49,6 +49,8 @@ jobs:
 
       - name: Build .NET solution and run unit tests
         timeout-minutes: 10
+        env:
+          BA_OFFLINE_TEST_MACHINE_ROOT: '1'
         run: dotnet test dotnet\BezpiecznyAktualizator.slnx --configuration Release --no-restore --filter "Category!=Live&Category!=VmIntegration" --logger "console;verbosity=normal" --blame-hang --blame-hang-timeout 3m --blame-hang-dump-type none
 
       - name: Upload CycloneDX SBOM
