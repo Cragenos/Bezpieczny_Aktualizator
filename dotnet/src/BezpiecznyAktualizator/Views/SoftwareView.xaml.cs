@@ -371,6 +371,19 @@ public partial class SoftwareView : UserControl
         RefreshTable();
     }
 
+    private async void Antivirus_Click(object sender, RoutedEventArgs e)
+    {
+        IReadOnlyList<AntivirusProduct> products = [];
+        var ok = await _runner.RunIndependentAsync(LogEvent.Antivirus, L.T("Odczytywanie informacji o lokalnych antywirusach..."), async () =>
+        {
+            products = await Task.Run(AntivirusInventory.GetRegisteredProducts);
+            _runner.Log(AntivirusInventory.Describe(products).ToString(), SyslogSeverity.Informational);
+        }, typeof(AntivirusInventoryException));
+        if (!ok) return;
+        BottomTabs.SelectedIndex = 1;
+        Ui.Info(this, L.T("Ochrona antywirusowa"), AntivirusInventory.Describe(products).ToString());
+    }
+
     private async void Risk_Click(object sender, RoutedEventArgs e)
     {
         if (_items.Count == 0) return;
@@ -762,7 +775,7 @@ public partial class SoftwareView : UserControl
                 var sha256 = "";
                 if (verifyChecksums)
                 {
-                    verifiedInstaller = await VerifyInstallerAsync(s.Name, s.WingetId!, s.WingetSource);
+                    verifiedInstaller = await VerifyInstallerAsync(s.Name, s.WingetId!, s.WingetSource, version);
                     if (verifiedInstaller is null)
                     {
                         blocked.Add(s);
@@ -824,6 +837,7 @@ public partial class SoftwareView : UserControl
     /// </summary>
     private async Task<VerifiedInstaller?> VerifyInstallerAsync(string name, string wingetId, string source, string version = "")
     {
+        await WingetClient.EnsureLocalManifestFilesEnabledAsync();
         _runner.Log(L.F("Weryfikacja plików kontrolnych: {0} ({1})...", name, wingetId), SyslogSeverity.Informational, LogEvent.Verify);
         var result = await InstallerVerifier.VerifyAsync(wingetId, source,
                                                          text => Dispatcher.BeginInvoke(() => _runner.SetStatus($"{name}: {text}")),
@@ -853,8 +867,10 @@ public partial class SoftwareView : UserControl
         }
         if (result.PassedWithoutScan)
         {
+            var antivirusInfo = result.AntivirusInventoryCheck?.Detail?.ToString();
             var install = Ui.Confirm(this, L.T("Skanowanie Microsoft Defender"),
                 L.F("Microsoft Defender jest niedostępny (np. wyłączony przez inny program antywirusowy), więc instalator {0} nie został przeskanowany przed instalacją.", name) +
+                (antivirusInfo is null ? "" : "\n\n" + antivirusInfo) +
                 "\n\n" + L.T("Pozostałe kontrole zakończyły się pomyślnie. Zainstalować bez skanowania antywirusowego?"), warning: true);
             _runner.Log(install ? L.F("Użytkownik zezwolił na instalację {0} bez skanowania Microsoft Defender.", name)
                                 : L.F("Użytkownik wstrzymał instalację {0}.", name),

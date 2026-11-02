@@ -24,6 +24,9 @@ public sealed class InstallerVerification
     /// <summary>Skanowanie programem Microsoft Defender było wymagane, ale nie mogło zostać wykonane.</summary>
     public bool DefenderUnavailable { get; set; }
 
+    /// <summary>Informacja o programach zarejestrowanych w Windows, gdy skanowanie Defender jest niedostępne.</summary>
+    public Check? AntivirusInventoryCheck { get; internal set; }
+
     /// <summary>Aktualizacja jest zarządzana przez Microsoft Store, który nie udostępnia instalatora do niezależnego skanu.</summary>
     public bool StoreManaged { get; set; }
 
@@ -176,8 +179,7 @@ public static partial class InstallerVerifier
             {
                 progress?.Invoke(L.T("Skanowanie instalatora programem Microsoft Defender..."));
                 var scan = await DefenderScanner.ScanFileAsync(installer, ct);
-                result.DefenderUnavailable = scan.Verdict == DefenderVerdict.Unavailable;
-                result.Checks.Add(DefenderCheck(scan));
+                await AddDefenderResultAsync(result, scan, AntivirusInventory.GetRegisteredProducts, ct);
             }
             result.Completed = true;
             if (!result.Blocked)
@@ -250,6 +252,32 @@ public static partial class InstallerVerifier
             _ => new Check(label, CheckStatus.Warn,
                 L.Txt("Microsoft Defender jest niedostępny (np. wyłączony przez inny program antywirusowy): {0}", scan.Detail)),
         };
+    }
+
+    internal static async Task AddDefenderResultAsync(InstallerVerification result, DefenderScan scan,
+                                                       Func<IReadOnlyList<AntivirusProduct>> lookup, CancellationToken ct = default)
+    {
+        result.DefenderUnavailable = scan.Verdict == DefenderVerdict.Unavailable;
+        result.Checks.Add(DefenderCheck(scan));
+        if (result.DefenderUnavailable)
+        {
+            var antivirusCheck = await Task.Run(() => AntivirusCheck(lookup), ct);
+            result.AntivirusInventoryCheck = antivirusCheck;
+            result.Checks.Add(antivirusCheck);
+        }
+    }
+
+    internal static Check AntivirusCheck(Func<IReadOnlyList<AntivirusProduct>> lookup)
+    {
+        var label = L.Txt("Programy antywirusowe w Zabezpieczeniach Windows");
+        try
+        {
+            return new Check(label, CheckStatus.Warn, AntivirusInventory.Describe(lookup()));
+        }
+        catch (AntivirusInventoryException ex)
+        {
+            return new Check(label, CheckStatus.Warn, ex.Message);
+        }
     }
 
     private static async Task<Check> PublisherCheckAsync(string installerUrl, FileDigests digests, CancellationToken ct)

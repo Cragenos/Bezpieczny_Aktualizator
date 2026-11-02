@@ -8,6 +8,8 @@
             <Button Style="{StaticResource ToolButton}" Tag="&#xE895;" Content="{l:Tr 'Sprawdź aktualizacje'}" Click="CheckUpdates_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xEA18;" Content="{l:Tr 'Oceń źródło'}" Click="Assess_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE9D5;" Content="{l:Tr 'Oceń wszystkie aktualizacje'}" Click="AssessAll_Click" />
+            <Button x:Name="AntivirusButton" Style="{StaticResource ToolButton}" Tag="&#xE72E;" Content="{l:Tr 'Sprawdź antywirusa'}" Click="Antivirus_Click"
+                    ToolTip="{l:Tr 'Pokazuje antywirusy zgłoszone do Zabezpieczeń Windows i ich stan. Samo wykrycie nie skanuje instalatora.'}" />
             <Button Style="{StaticResource AccentToolButton}" Tag="&#xE896;" Content="{l:Tr 'Aktualizuj zaznaczone'}" Click="Upgrade_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE7BA;" Content="{l:Tr 'Sprawdź podatności i wsparcie'}" Click="Risk_Click"
                     ToolTip="{l:Tr 'Sprawdza znane podatności (CVE) zainstalowanych wersji w bazie NVD oraz wsparcie producenta (endoflife.date, aktywność projektu). Dotyczy zaznaczonych programów, a gdy nic nie zaznaczono - wszystkich.'}" />

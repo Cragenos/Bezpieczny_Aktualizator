@@ -1,5 +1,6 @@
 using BezpiecznyAktualizator.Core.Drivers;
 using BezpiecznyAktualizator.Core.Inventory;
+using BezpiecznyAktualizator.Core.Security;
 using BezpiecznyAktualizator.Core.Updates;
 using BezpiecznyAktualizator.Core.Winget;
 using System.Text.RegularExpressions;
@@ -38,6 +39,18 @@ public class LiveSystemTests
         Assert.NotEmpty(drivers);
         Assert.Contains(drivers, d => d.HardwareIds.Count > 0);
         Assert.Contains(drivers, d => d.Date.Length == 10);
+    }
+
+    [Fact]
+    public void SecurityCenterReportsRegisteredAntiviruses()
+    {
+        var products = AntivirusInventory.GetRegisteredProducts();
+        Assert.All(products, product =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(product.Name));
+            Assert.True(Enum.IsDefined(product.Protection));
+            Assert.True(Enum.IsDefined(product.Signatures));
+        });
     }
 
     [Fact]

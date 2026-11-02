@@ -127,14 +127,18 @@ public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, Prog
     public Task<bool> RunAsync(string msgId, string description, Func<Task> work, params Type[] expectedErrors) =>
         RunCoreAsync(msgId, description, _ => work(), expectedErrors);
 
+    /// <summary>Uruchamia operację niezależną od zasobu kontrolowanego przez canStart.</summary>
+    public Task<bool> RunIndependentAsync(string msgId, string description, Func<Task> work, params Type[] expectedErrors) =>
+        RunCoreAsync(msgId, description, _ => work(), expectedErrors, checkStartCondition: false);
+
     public Task<bool> RunWithProgressAsync(string msgId, string description,
                                            Func<IProgress<string>, Task> work, params Type[] expectedErrors) =>
         RunCoreAsync(msgId, description, work, expectedErrors);
 
     private async Task<bool> RunCoreAsync(string msgId, string description,
-                                          Func<IProgress<string>, Task> work, Type[] expectedErrors)
+                                          Func<IProgress<string>, Task> work, Type[] expectedErrors, bool checkStartCondition = true)
     {
-        if (canStart is not null && !canStart()) return false;
+        if (checkStartCondition && canStart is not null && !canStart()) return false;
         var previousEvent = _event;
         _event = msgId;
         var watch = Stopwatch.StartNew();

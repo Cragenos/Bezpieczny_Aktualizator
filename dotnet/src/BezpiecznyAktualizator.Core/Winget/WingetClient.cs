@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using BezpiecznyAktualizator.Core.Localization;
+using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Security;
 
@@ -20,7 +22,10 @@ public static partial class WingetClient
 {
     private static readonly string[] CommonArgs = ["--accept-source-agreements", "--disable-interactivity"];
     private static readonly object ExecutableGate = new();
+    private static readonly SemaphoreSlim CommandGate = new(1, 1);
     private static string? _cachedExecutable;
+    internal delegate Task<(int Code, string Output)> CommandRunner(IReadOnlyList<string> args, CancellationToken ct);
+    internal const int SourceCacheMissingCode = unchecked((int)0x80071130);
 
     public static bool IsAvailable()
     {
@@ -114,8 +119,50 @@ public static partial class WingetClient
         return psi;
     }
 
-    public static async Task<(int Code, string Output)> RunAsync(IEnumerable<string> args, int timeoutSeconds = 300,
-                                                                 CancellationToken ct = default)
+    public static Task<(int Code, string Output)> RunAsync(IEnumerable<string> args, int timeoutSeconds = 300,
+                                                           CancellationToken ct = default) =>
+        RunWithSourceRetryAsync(args.ToArray(),
+            (arguments, token) => WithCommandGateAsync(() => RunProcessAsync(arguments, timeoutSeconds, token), token), ct);
+
+    internal static async Task<T> WithCommandGateAsync<T>(Func<Task<T>> run, CancellationToken ct)
+    {
+        await CommandGate.WaitAsync(ct);
+        try { return await run(); }
+        finally { CommandGate.Release(); }
+    }
+
+    internal static async Task<(int Code, string Output)> RunWithSourceRetryAsync(
+        IReadOnlyList<string> args, CommandRunner run, CancellationToken ct = default)
+    {
+        var result = await run(args, ct);
+        if (result.Code != SourceCacheMissingCode || !IsSourceQuery(args)) return result;
+        Syslog.Warning(LogEvent.UpdateCheck,
+            L.T("WinGet: błąd pamięci podręcznej źródła (0x80071130). Ponawianie odczytu."));
+        await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        result = await run(args, ct);
+        if (result.Code == SourceCacheMissingCode)
+            throw new WingetException(
+                L.T("Nie udało się odczytać źródła WinGet po ponowieniu. Spróbuj ponownie później; program nie resetuje źródeł automatycznie.") +
+                "\n0x80071130\n" + result.Output.Trim());
+        return result;
+    }
+
+    private static bool IsSourceQuery(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0) return false;
+        if (args[0] is "list" or "search" or "show") return true;
+        if (args[0] != "upgrade") return false;
+        for (var i = 1; i < args.Count; i++)
+        {
+            if (args[i] is "--include-unknown" or "--accept-source-agreements" or "--disable-interactivity") continue;
+            if (args[i] == "--source" && i + 1 < args.Count && !args[i + 1].StartsWith('-')) { i++; continue; }
+            return false;
+        }
+        return true;
+    }
+
+    private static async Task<(int Code, string Output)> RunProcessAsync(IEnumerable<string> args, int timeoutSeconds,
+                                                                         CancellationToken ct)
     {
         using var proc = Process.Start(StartInfo(args)) ?? throw new WingetException(L.T("Nie udało się uruchomić winget."));
         var stdout = proc.StandardOutput.ReadToEndAsync(ct);
@@ -126,10 +173,15 @@ public static partial class WingetClient
         {
             await proc.WaitForExitAsync(timeout.Token);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             try { proc.Kill(true); } catch (InvalidOperationException) { }
             throw new WingetException($"Przekroczono czas oczekiwania na winget ({timeoutSeconds} s).");
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(true); } catch (InvalidOperationException) { }
+            throw;
         }
         return (proc.ExitCode, await stdout + await stderr);
     }
@@ -289,18 +341,50 @@ public static partial class WingetClient
                                          string version = "", CancellationToken ct = default) =>
         RunStreamingAsync(UpgradeArguments(packageId, source, version), onOutput, ct);
 
-    public static Task<int> UpgradeVerifiedAsync(VerifiedInstaller installer, Action<string> onOutput,
+    public static async Task<int> UpgradeVerifiedAsync(VerifiedInstaller installer, Action<string> onOutput,
                                                   CancellationToken ct = default)
     {
         installer.Validate();
-        return RunStreamingAsync(VerifiedUpgradeArguments(installer.ManifestPath), onOutput, ct);
+        await EnsureLocalManifestFilesEnabledAsync(ct);
+        installer.Validate();
+        return await RunStreamingAsync(VerifiedUpgradeArguments(installer.ManifestPath), onOutput, ct);
     }
 
-    public static Task<int> InstallVerifiedAsync(VerifiedInstaller installer, Action<string> onOutput,
+    public static async Task<int> InstallVerifiedAsync(VerifiedInstaller installer, Action<string> onOutput,
                                                   bool allowDowngrade = false, CancellationToken ct = default)
     {
         installer.Validate();
-        return RunStreamingAsync(VerifiedInstallArguments(installer.ManifestPath, allowDowngrade), onOutput, ct);
+        await EnsureLocalManifestFilesEnabledAsync(ct);
+        installer.Validate();
+        return await RunStreamingAsync(VerifiedInstallArguments(installer.ManifestPath, allowDowngrade), onOutput, ct);
+    }
+
+    public static Task EnsureLocalManifestFilesEnabledAsync(CancellationToken ct = default) =>
+        EnsureLocalManifestFilesEnabledCoreAsync((args, token) => RunAsync(args, ct: token), ct);
+
+    internal static async Task EnsureLocalManifestFilesEnabledCoreAsync(CommandRunner run, CancellationToken ct = default)
+    {
+        var (code, output) = await run(["settings", "export", "--disable-interactivity"], ct);
+        if (code != 0)
+            throw new WingetException(L.T("Nie udało się odczytać ustawienia LocalManifestFiles w WinGet.") +
+                                      $"\n0x{code:X8}\n" + output.Trim());
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("adminSettings", out var admin) || admin.ValueKind != JsonValueKind.Object ||
+                !admin.TryGetProperty("LocalManifestFiles", out var enabled) ||
+                enabled.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new WingetException(L.T("Nie udało się odczytać ustawienia LocalManifestFiles w WinGet."));
+            if (!enabled.GetBoolean())
+                throw new WingetException(
+                    L.T("WinGet: instalacja ze zweryfikowanego manifestu wymaga LocalManifestFiles=true. Poproś administratora o ocenę tej polityki; program nie zmienia jej automatycznie."));
+        }
+        catch (JsonException)
+        {
+            throw new WingetException(L.T("Nie udało się odczytać ustawienia LocalManifestFiles w WinGet."));
+        }
     }
 
     internal static List<string> VerifiedUpgradeArguments(string manifestPath) =>
@@ -350,7 +434,10 @@ public static partial class WingetClient
         return ParseVersions(output);
     }
 
-    private static async Task<int> RunStreamingAsync(List<string> args, Action<string> onOutput, CancellationToken ct)
+    private static Task<int> RunStreamingAsync(List<string> args, Action<string> onOutput, CancellationToken ct) =>
+        WithCommandGateAsync(() => RunStreamingProcessAsync(args, onOutput, ct), ct);
+
+    private static async Task<int> RunStreamingProcessAsync(List<string> args, Action<string> onOutput, CancellationToken ct)
     {
         using var proc = Process.Start(StartInfo(args)) ?? throw new WingetException(L.T("Nie udało się uruchomić winget."));
 
@@ -365,7 +452,15 @@ public static partial class WingetClient
             }
         }
 
-        await Task.WhenAll(Pump(proc.StandardOutput), Pump(proc.StandardError), proc.WaitForExitAsync(ct));
+        try
+        {
+            await Task.WhenAll(Pump(proc.StandardOutput), Pump(proc.StandardError), proc.WaitForExitAsync(ct));
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(true); } catch (InvalidOperationException) { }
+            throw;
+        }
         return proc.ExitCode;
     }
 

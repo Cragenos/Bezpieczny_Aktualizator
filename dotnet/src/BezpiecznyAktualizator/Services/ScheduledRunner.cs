@@ -224,6 +224,17 @@ public static class ScheduledRunner
                 Syslog.Info(LogEvent.Policy, L.F("Pominięto {0}: {1}", s.Name, rule.Reason.ToString()));
         }
         if (!install) return;
+        if (candidates.Count > 0)
+        {
+            try { await WingetClient.EnsureLocalManifestFilesEnabledAsync(); }
+            catch (WingetException ex)
+            {
+                result.Error = ex.Message;
+                result.Skipped.AddRange(candidates.Select(s => $"{s.Name} {s.Version} → {s.AvailableVersion}"));
+                Syslog.Error(LogEvent.Scheduled, ex.Message);
+                return;
+            }
+        }
 
         foreach (var s in candidates)
         {
@@ -251,7 +262,7 @@ public static class ScheduledRunner
                 continue;
             }
 
-            var verification = await InstallerVerifier.VerifyAsync(s.WingetId!, s.WingetSource);
+            var verification = await InstallerVerifier.VerifyAsync(s.WingetId!, s.WingetSource, version: s.AvailableVersion);
             using var verifiedInstaller = verification.VerifiedInstaller;
             foreach (var c in verification.Checks.Where(c => c.Status != CheckStatus.Ok))
                 Syslog.Warning(LogEvent.Verify, $"{s.Name}: {c.Label}: {c.Detail}");

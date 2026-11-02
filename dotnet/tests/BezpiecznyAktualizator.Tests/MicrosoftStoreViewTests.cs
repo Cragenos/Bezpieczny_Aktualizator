@@ -23,6 +23,11 @@ public class MicrosoftStoreViewTests
                 var window = new MainWindow();
                 var tabs = Assert.IsType<TabControl>(window.FindName("Tabs"));
                 Assert.Equal(4, tabs.Items.Count);
+                var softwareTab = Assert.IsType<TabItem>(tabs.Items[0]);
+                var softwareView = Assert.IsType<SoftwareView>(softwareTab.Content);
+                var antivirus = Assert.IsType<Button>(softwareView.FindName("AntivirusButton"));
+                Assert.True(antivirus.IsEnabled);
+                Assert.NotNull(antivirus.ToolTip);
                 var tab = Assert.IsType<TabItem>(tabs.Items[3]);
                 var view = Assert.IsType<MicrosoftStoreView>(tab.Content);
                 var toolbar = Assert.IsType<WrapPanel>(view.FindName("Toolbar"));

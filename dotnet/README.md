@@ -39,6 +39,10 @@ Zakładka Microsoft Store wymaga WinGet obsługującego `source export` i oficja
 
 Integracja z WinGet uruchamia wyłącznie `winget.exe` z zarejestrowanego pakietu Microsoft App Installer o podpisie Microsoft; nie wybiera przypadkowego pliku `winget` z `PATH`. Dla aktualizacji z repozytorium program pobiera jeden instalator i jego manifest, wymaga sumy SHA-256, zgodności identyfikatora pakietu i wersji oraz wiąże skanowanie z tym samym lokalnym manifestem używanym do instalacji. Zależności nie są pobierane jako dodatkowe instalatory, a błędy kontroli blokują instalację. Aktualizacje Store są osobne, ręczne i wymagają potwierdzenia przez Store. Jeśli plik historii aktualizacji jest uszkodzony lub nie można go zapisać, błąd jest jawnie zgłaszany; aplikacja nie zastępuje historii pustą listą.
 
+Instalacja i wycofanie ze zweryfikowanego manifestu wymagają ustawienia administracyjnego WinGet `LocalManifestFiles=true`. Aplikacja odczytuje je przez `winget settings export` przed pobieraniem instalatora do instalacji oraz ponownie przed uruchomieniem instalacji. Wyłączone lub nieczytelne ustawienie zatrzymuje tę operację z komunikatem, zamiast wyświetlać pomoc WinGet i kod `0x8A150002`. Program nie włącza tej polityki, nie podnosi w tym celu uprawnień i nie przechodzi na instalację bez zweryfikowanego manifestu; decyzja o polityce należy do administratora. Sama weryfikacja pliku w bibliotece nie wymaga włączania tej opcji. Niedostępny Defender (np. przy aktywnym ESET) nadal wymaga dotychczasowej, osobnej zgody na pominięcie skanu; pozytywny podpis i suma nie oznaczają wykonania skanu antywirusowego.
+
+Polecenia WinGet uruchamiane przez jeden proces aplikacji nie nakładają się. Odczyt listy, wyszukiwanie i odczyt metadanych po błędzie pamięci podręcznej źródła `0x80071130` są ponawiane jeden raz po sekundzie, z ostrzeżeniem w syslog. Ponowne niepowodzenie jest zgłaszane jawnie. Instalacje, pobieranie i zmiany źródeł nie są automatycznie ponawiane przez ten mechanizm; program nie resetuje źródeł ani nie usuwa pamięci podręcznej. Nie wyklucza to konfliktów z innymi procesami WinGet uruchomionymi poza aplikacją.
+
 ## Budowanie i uruchamianie
 
 ```powershell
@@ -186,7 +190,7 @@ Przykładowy wpis:
 | PRI | facility `user` (1) × 8 + ważność: 3 = error, 4 = warning, 5 = notice (instalacje, start/zamknięcie), 6 = informational, 2 = critical (awaria) |
 | TIMESTAMP | czas lokalny z przesunięciem UTC i mikrosekundami (RFC 3339) |
 | HOSTNAME / APP-NAME / PROCID | nazwa komputera (FQDN w domenie), `BezpiecznyAktualizator`, PID procesu |
-| MSGID | typ zdarzenia: `APP`, `SETTINGS`, `SW_SCAN`, `SW_UPDATE_CHECK`, `SW_ASSESS`, `SW_UPGRADE`, `SW_VERIFY` (weryfikacja plików kontrolnych), `SW_SEARCH`, `DRV_SCAN`, `DRV_UPDATE_CHECK`, `DRV_INSTALL`, `REPORT`, `ERROR` |
+| MSGID | typ zdarzenia: `APP`, `SETTINGS`, `SW_SCAN`, `SW_UPDATE_CHECK`, `SW_ASSESS`, `SW_UPGRADE`, `SW_VERIFY` (weryfikacja plików kontrolnych), `ANTIVIRUS` (wykrywanie antywirusów), `SW_SEARCH`, `DRV_SCAN`, `DRV_UPDATE_CHECK`, `DRV_INSTALL`, `REPORT`, `ERROR` |
 | STRUCTURED-DATA | zarejestrowane w IANA elementy `origin` (program i wersja) oraz `meta` (`sequenceId` — numer kolejny w procesie, `language` — język komunikatu) |
 | MSG | UTF-8 poprzedzony znakiem BOM (wymóg RFC 5424 dla MSG-UTF8), w języku interfejsu |
 
@@ -210,16 +214,20 @@ Opcja **Sprawdzaj pliki kontrolne przed instalacją** w zakładce „Oprogramowa
 
    Obsługiwane formaty to GNU (`suma  plik`), BSD (`SHA256 (plik) = suma`), sama suma oraz `plik: suma`.
 4. Weryfikuje **podpis Authenticode** instalatora (WinVerifyTrust, z kontrolą unieważnienia certyfikatów) i zapisuje nazwę podpisującego.
-5. Instaluje dokładnie zweryfikowaną wersję (`winget upgrade --version`). Winget przy instalacji ponownie sprawdza tę samą sumę SHA256.
+5. Skanuje pobrany instalator programem Microsoft Defender. Jeśli Defender jest niedostępny, pokazuje także informacje o antywirusach zarejestrowanych w Zabezpieczeniach Windows.
+6. Instaluje dokładnie zweryfikowaną wersję przy użyciu lokalnego manifestu. Winget przy instalacji ponownie sprawdza tę samą sumę SHA256.
 
 | Wynik | Działanie |
 |---|---|
 | Niezgodna suma (manifest lub plik wydawcy), nieprawidłowy lub unieważniony podpis | instalacja tego programu jest **wstrzymywana** bez pytania |
 | Brak pliku kontrolnego wydawcy, instalator niepodpisany | ostrzeżenie w dzienniku, instalacja jest kontynuowana |
-| Weryfikacji nie można przeprowadzić (np. wydawca blokuje pobieranie) | pytanie, czy kontynuować (domyślnie **nie**) |
+| Microsoft Defender niedostępny | ostrzeżenie i pytanie o wyraźną zgodę na instalację bez skanowania (domyślnie **nie**); harmonogram domyślnie pomija aktualizację |
+| Weryfikacji nie można przeprowadzić (np. wydawca blokuje pobieranie) | aktualizacja jest wstrzymywana; można świadomie wyłączyć dodatkową weryfikację i zaakceptować ostrzeżenie |
 | Pakiety Microsoft Store | weryfikację wykonuje sam Sklep |
 
 Wyniki każdego sprawdzenia trafiają do zakładki „Dziennik” i do dziennika syslog (MSGID `SW_VERIFY`). Sterowniki z Windows Update są weryfikowane przez agenta Windows Update: sprawdza on podpis i skrót pakietu przed instalacją.
+
+Przycisk **Sprawdź antywirusa** w zakładce „Oprogramowanie” odczytuje z Centrum zabezpieczeń Windows listę zgłoszonych programów, ich stan ochrony oraz aktualność sygnatur. Działa niezależnie od ustawienia lokalnych manifestów winget. Interfejs Centrum zabezpieczeń jest dostępny na klienckim systemie Windows 8 lub nowszym; Windows Server nie jest obsługiwany. Brak wpisów nie wyklucza niezarejestrowanego antywirusa; niedostępność usługi jest zgłaszana jako błąd. Wykrycie ESET lub innego produktu nie uruchamia jego skanera i nie potwierdza przeskanowania instalatora. Nie zmienia również wymogu zgody na instalację bez skanowania Defenderem.
 
 ## Automatyczne sprawdzanie wersji po uruchomieniu
 

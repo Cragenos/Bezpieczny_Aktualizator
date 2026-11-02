@@ -393,6 +393,8 @@ public class DefenderTests
         using var blockedArtifact = TestVerifiedInstaller();
         using var storeArtifact = TestVerifiedInstaller();
         var noScan = new InstallerVerification { Completed = true, DefenderUnavailable = true, VerifiedInstaller = noScanArtifact };
+        noScan.Checks.Add(InstallerVerifier.AntivirusCheck(() =>
+            [new AntivirusProduct("Example Antivirus", AntivirusProtectionState.On, AntivirusSignatureStatus.UpToDate)]));
         var blockedNoScan = new InstallerVerification
         {
             Completed = true, DefenderUnavailable = true, VerifiedInstaller = blockedArtifact,

@@ -21,6 +21,7 @@ public static class LogEvent
     public const string Assess = "SW_ASSESS";
     public const string Upgrade = "SW_UPGRADE";
     public const string Verify = "SW_VERIFY";
+    public const string Antivirus = "ANTIVIRUS";
     public const string Search = "SW_SEARCH";
     public const string DriverScan = "DRV_SCAN";
     public const string DriverCheck = "DRV_UPDATE_CHECK";
