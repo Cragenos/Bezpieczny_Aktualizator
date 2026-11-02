@@ -1,0 +1,85 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore dependencies and fail on NuGet vulnerabilities
+        run: dotnet restore dotnet\BezpiecznyAktualizator.slnx --property:NuGetAudit=true --property:NuGetAuditMode=all --property:NuGetAuditLevel=low --property:WarningsAsErrors=NU1900%3BNU1901%3BNU1902%3BNU1903%3BNU1904%3BNU1905
+
+      - name: Report vulnerable dependencies
+        run: dotnet list dotnet\BezpiecznyAktualizator.slnx package --vulnerable --include-transitive
+
+      - name: Generate CycloneDX SBOM
+        shell: pwsh
+        run: |
+          $toolPath = Join-Path $env:RUNNER_TEMP 'cyclonedx'
+          dotnet tool install --tool-path $toolPath CycloneDX --version 6.3.1
+          New-Item -ItemType Directory -Force -Path artifacts\sbom | Out-Null
+          & (Join-Path $toolPath 'dotnet-CycloneDX.exe') dotnet\BezpiecznyAktualizator.slnx `
+            --output artifacts\sbom --output-format Json --exclude-test-projects `
+            --configuration Release --disable-package-restore
+
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build .NET solution and run unit tests
+        run: dotnet test dotnet\BezpiecznyAktualizator.slnx --configuration Release --filter "Category!=Live&Category!=VmIntegration"
+
+      - name: Upload CycloneDX SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: cyclonedx-sbom
+          path: artifacts\sbom\bom.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Run isolated MSI install, upgrade, and uninstall smoke test
+        shell: pwsh
+        run: .\tests\msi\Invoke-MsiSmokeTest.ps1
+
+  publish-release-sbom:
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: test
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download CycloneDX SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: cyclonedx-sbom
+          path: artifacts\sbom
+
+      - name: Attach SBOM to GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$env:RELEASE_TAG" artifacts\sbom\bom.json --clobber
