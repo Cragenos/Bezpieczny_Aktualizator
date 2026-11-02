@@ -32,6 +32,8 @@ public static class LogEvent
     public const string Policy = "POLICY";
     public const string Integrity = "INTEGRITY";
     public const string AppUpdate = "APP_UPDATE";
+    public const string WindowsUpdate = "WINDOWS_UPDATE";
+    public const string StoreUpdate = "STORE_UPDATE";
     public const string Error = "ERROR";
 }
 
@@ -78,6 +80,49 @@ public static class Syslog
 
     public static void Error(string msgId, string message, Exception? ex = null) =>
         Write(SyslogSeverity.Error, msgId, ex is null ? message : $"{message}\n{ex}");
+
+    public static IReadOnlyList<string> ReadRecentIssues(int limit = 500)
+    {
+        if (limit is < 1 or > 10000) throw new ArgumentOutOfRangeException(nameof(limit));
+        if (!System.IO.Directory.Exists(Directory)) return [];
+
+        var files = System.IO.Directory.EnumerateFiles(Directory, FileName + "*")
+            .Select(path => (Path: path, Archive: ArchiveNumber(path)))
+            .Where(item => item.Archive >= 0)
+            .OrderBy(item => item.Archive);
+        var issues = new List<string>(Math.Min(limit, 500));
+        foreach (var file in files)
+        {
+            using var stream = new FileStream(file.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Utf8, detectEncodingFromByteOrderMarks: true);
+            var lines = new List<string>();
+            while (reader.ReadLine() is { } line) lines.Add(line);
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                if (!IsIssue(lines[i])) continue;
+                issues.Add(lines[i]);
+                if (issues.Count == limit) return issues;
+            }
+        }
+        return issues;
+    }
+
+    private static int ArchiveNumber(string path)
+    {
+        var name = Path.GetFileName(path);
+        if (name.Equals(FileName, StringComparison.OrdinalIgnoreCase)) return 0;
+        var suffix = name.StartsWith(FileName + ".", StringComparison.OrdinalIgnoreCase) ? name[(FileName.Length + 1)..] : "";
+        return int.TryParse(suffix, CultureInfo.InvariantCulture, out var archive) ? archive : -1;
+    }
+
+    private static bool IsIssue(string line)
+    {
+        var end = line.IndexOf('>');
+        if (!line.StartsWith('<') || end <= 1 ||
+            !int.TryParse(line.AsSpan(1, end - 1), NumberStyles.None, CultureInfo.InvariantCulture, out var priority))
+            return false;
+        return priority is >= 0 and <= 191 && (priority & 7) <= (int)SyslogSeverity.Warning;
+    }
 
     public static void Write(SyslogSeverity severity, string msgId, string message)
     {

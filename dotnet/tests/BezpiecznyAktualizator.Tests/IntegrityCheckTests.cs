@@ -25,6 +25,15 @@ public class IntegrityCheckTests
         Assert.Null(IntegrityCheck.Problem(new SignatureInfo(state, 0, "x"), Thumb.ToLowerInvariant(), Thumb));
 
     [Fact]
+    public void AcceptsOnlyAnExplicitlyTrustedSignerDuringRotation()
+    {
+        var newSigner = new string('A', 40);
+        var signature = new SignatureInfo(SignatureState.Valid, 0, "x");
+        Assert.Null(IntegrityCheck.Problem(signature, newSigner.ToLowerInvariant(), new[] { Thumb, newSigner }));
+        Assert.NotNull(IntegrityCheck.Problem(signature, new string('B', 40), new[] { Thumb, newSigner }));
+    }
+
+    [Fact]
     public void AnySignerIsAcceptedWhenNoneIsExpected() =>
         Assert.Null(IntegrityCheck.Problem(new SignatureInfo(SignatureState.Valid, 0, "x"), new string('A', 40), ""));
 

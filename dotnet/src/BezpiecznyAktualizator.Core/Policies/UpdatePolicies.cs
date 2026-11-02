@@ -4,6 +4,7 @@ using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Security;
+using BezpiecznyAktualizator.Core.Store;
 
 namespace BezpiecznyAktualizator.Core.Policies;
 
@@ -141,11 +142,16 @@ public sealed class UpdatePolicies
         if (ExclusionFor(s.WingetId) is { } ex)
             return new(PolicyVerdict.Excluded, ex.Reason.Length > 0
                 ? L.Txt("Program jest na liście wykluczonych: {0}", ex.Reason) : L.Txt("Program jest na liście wykluczonych."));
-        if (s.HasUpdate && HoldFor(s.WingetId, now) is { } hold && !hold.Allows(s.AvailableVersion))
-            return new(PolicyVerdict.Held, hold.Version.Length == 0
-                ? L.Txt("Wersja wstrzymana na {0}{1}.", s.Version, hold.Reason.Length > 0 ? " - " + hold.Reason : "")
-                : L.Txt("Wersja wstrzymana ({0}) - dostępna wersja {1} nie jest dozwolona{2}.", hold.Version, s.AvailableVersion,
-                        hold.Reason.Length > 0 ? " - " + hold.Reason : ""));
+        if (s.HasUpdate && HoldFor(s.WingetId, now) is { } hold)
+        {
+            if (string.Equals(s.WingetSource, MicrosoftStoreClient.SourceName, StringComparison.OrdinalIgnoreCase))
+                return new(PolicyVerdict.Held, L.Txt("Microsoft Store nie gwarantuje instalacji wskazanej wersji. Aktywne wstrzymanie blokuje aktualizację."));
+            if (!hold.Allows(s.AvailableVersion))
+                return new(PolicyVerdict.Held, hold.Version.Length == 0
+                    ? L.Txt("Wersja wstrzymana na {0}{1}.", s.Version, hold.Reason.Length > 0 ? " - " + hold.Reason : "")
+                    : L.Txt("Wersja wstrzymana ({0}) - dostępna wersja {1} nie jest dozwolona{2}.", hold.Version, s.AvailableVersion,
+                            hold.Reason.Length > 0 ? " - " + hold.Reason : ""));
+        }
         return PolicyDecision.Allow;
     }
 

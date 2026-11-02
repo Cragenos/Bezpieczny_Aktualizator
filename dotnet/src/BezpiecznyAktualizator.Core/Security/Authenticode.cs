@@ -128,13 +128,21 @@ public static class IntegrityCheck
 {
     /// <summary>Opis problemu albo null, gdy plik jest nienaruszony i podpisany oczekiwanym certyfikatem.</summary>
     /// <remarks>Certyfikat własny (niezaufany w systemie) jest akceptowany, jeśli skrót pliku się zgadza i odcisk jest oczekiwany.</remarks>
-    public static string? Problem(SignatureInfo signature, string actualThumbprint, string expectedThumbprint) => signature.State switch
+    public static string? Problem(SignatureInfo signature, string actualThumbprint, string expectedThumbprint) =>
+        Problem(signature, actualThumbprint,
+            expectedThumbprint.Length == 0 ? [] : [expectedThumbprint]);
+
+    public static string? Problem(SignatureInfo signature, string actualThumbprint, IEnumerable<string> expectedThumbprints)
     {
-        SignatureState.Unsigned => L.T("Plik programu nie ma podpisu cyfrowego."),
-        SignatureState.Invalid => L.T("Podpis cyfrowy pliku programu jest nieprawidłowy - plik został zmieniony po podpisaniu."),
-        _ when expectedThumbprint.Length > 0 &&
-               !string.Equals(actualThumbprint, expectedThumbprint, StringComparison.OrdinalIgnoreCase)
-            => L.T("Plik programu podpisano innym certyfikatem niż certyfikat wydawcy."),
-        _ => null,
-    };
+        if (signature.State == SignatureState.Unsigned) return L.T("Plik programu nie ma podpisu cyfrowego.");
+        if (signature.State == SignatureState.Invalid)
+            return L.T("Podpis cyfrowy pliku programu jest nieprawidłowy - plik został zmieniony po podpisaniu.");
+        var trusted = expectedThumbprints.Where(IsThumbprint).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return trusted.Count > 0 && !trusted.Contains(actualThumbprint)
+            ? L.T("Plik programu podpisano innym certyfikatem niż certyfikat wydawcy.")
+            : null;
+    }
+
+    public static bool IsThumbprint(string value) =>
+        value.Length == 40 && value.All(Uri.IsHexDigit);
 }

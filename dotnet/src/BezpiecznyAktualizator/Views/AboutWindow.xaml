@@ -48,7 +48,7 @@
             </Border>
 
             <TextBlock Style="{StaticResource Secondary}" TextWrapping="Wrap"
-                       Text="{l:Tr 'Program korzysta z projektów open source: .NET i WPF, winget-cli i winget-pkgs, System.Management, Obfuscar (licencja MIT) oraz z danych NVD (NIST), CISA KEV i endoflife.date.'}" />
+                       Text="{l:Tr 'Program korzysta z projektów open source: .NET i WPF, winget-cli i winget-pkgs, System.Management, PDFsharp i Obfuscar oraz z danych NVD (NIST), OSV, FIRST EPSS, CISA KEV i endoflife.date.'}" />
         </StackPanel>
 
         <Border Grid.Row="1" Padding="24,16" BorderThickness="0,1,0,0"

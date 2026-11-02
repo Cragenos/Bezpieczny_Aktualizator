@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Security;
+using BezpiecznyAktualizator.Core.Updates;
 
 namespace BezpiecznyAktualizator.Core.Drivers;
 
@@ -32,7 +33,7 @@ public sealed partial class DriverUpdate
 
 public sealed class Driver
 {
-    public const string CatalogSearchUrl = "https://www.catalog.update.microsoft.com/Search.aspx?q=";
+    public const string CatalogSearchUrl = MicrosoftUpdateCatalog.SearchUrl;
     public const int ErrorNoDriver = 28;
 
     private static readonly HashSet<string> WhqlSigners = new(StringComparer.OrdinalIgnoreCase)
@@ -95,7 +96,7 @@ public sealed class Driver
     }
 
     public string CatalogUrl() =>
-        CatalogSearchUrl + Uri.EscapeDataString(HardwareIds.Count > 0 ? HardwareIds[0] : DeviceName);
+        MicrosoftUpdateCatalog.Search(HardwareIds.Count > 0 ? HardwareIds[0] : DeviceName);
 }
 
 public static class DriverMatcher

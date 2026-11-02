@@ -7,16 +7,24 @@
     <AssemblyName>BezpiecznyAktualizator</AssemblyName>
     <RootNamespace>BezpiecznyAktualizator</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\UpdaterAppIcon.ico</ApplicationIcon>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <!-- Pin PDFsharp's transitive Pkcs dependency; .NET supplies the runtime assembly. -->
+    <NoWarn>$(NoWarn);NU1510</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <Resource Include="Assets\UpdaterAppIcon.ico" />
+    <Resource Include="Assets\UpdaterAppIcon.png" />
     <ProjectReference Include="..\BezpiecznyAktualizator.Core\BezpiecznyAktualizator.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyMetadata Include="UpdateRepository" Value="$(UpdateRepository)" />
+    <InternalsVisibleTo Include="BezpiecznyAktualizator.Tests" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="PDFsharp" Version="6.2.4" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.2" NoWarn="NU1510" />
     <PackageReference Include="Obfuscar" Version="2.2.50">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

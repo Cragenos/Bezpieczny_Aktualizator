@@ -8,6 +8,8 @@
     <DockPanel Margin="16">
         <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap"
                    Text="{l:Tr 'Przed każdą aktualizacją zapamiętywana jest poprzednia wersja programu. Wycofanie instaluje tę wersję ponownie z repozytorium winget (po weryfikacji instalatora), o ile jest w nim nadal dostępna.'}" />
+        <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap"
+                   Text="{l:Tr 'Wycofanie aktualizacji Microsoft Store jest niedostępne.'}" />
         <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0" LastChildFill="False">
             <TextBlock x:Name="EmptyLabel" Text="{l:Tr 'Brak zapisanych aktualizacji.'}" VerticalAlignment="Center"
                        Visibility="Collapsed" />

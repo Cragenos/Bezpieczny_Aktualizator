@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Models;
+using BezpiecznyAktualizator.Core.Security;
 
 namespace BezpiecznyAktualizator.Core.Winget;
 
@@ -18,23 +19,91 @@ public sealed record WingetPackage(string Name, string Id, string Version = "", 
 public static partial class WingetClient
 {
     private static readonly string[] CommonArgs = ["--accept-source-agreements", "--disable-interactivity"];
+    private static readonly object ExecutableGate = new();
+    private static string? _cachedExecutable;
 
-    public static bool IsAvailable() => FindExecutable() is not null;
+    public static bool IsAvailable()
+    {
+        try { return FindExecutable() is not null; }
+        catch (WingetException) { return false; }
+    }
 
     private static string? FindExecutable()
     {
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        var candidates = path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .Select(dir => Path.Combine(dir.Trim(), "winget.exe"))
-            .Append(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                                 "Microsoft", "WindowsApps", "winget.exe"));
-        return candidates.FirstOrDefault(File.Exists);
+        lock (ExecutableGate)
+        {
+            if (_cachedExecutable is { } cached && IsTrustedExecutable(cached)) return cached;
+            _cachedExecutable = ResolveAppInstallerExecutable();
+            return _cachedExecutable is { } resolved && IsTrustedExecutable(resolved) ? resolved : null;
+        }
+    }
+
+    private static string? ResolveAppInstallerExecutable()
+    {
+        var powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        if (!File.Exists(powershell)) return null;
+
+        const string query = "$ErrorActionPreference='Stop'; " +
+            "$p=Get-AppxPackage -Name 'Microsoft.DesktopAppInstaller' | " +
+            "Where-Object { $_.Status -eq 'Ok' -and $_.SignatureKind -eq 'Store' -and " +
+            "$_.Publisher -eq 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US' } | " +
+            "Sort-Object Version -Descending | Select-Object -First 1; " +
+            "if ($p) { $e=Join-Path $p.InstallLocation 'winget.exe'; " +
+            "if (Test-Path -LiteralPath $e -PathType Leaf) { Write-Output $e } }";
+        using var process = Process.Start(new ProcessStartInfo(powershell)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            ArgumentList = { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", query },
+        }) ?? throw new WingetException(L.T("Nie udało się sprawdzić instalacji Microsoft App Installer."));
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        try
+        {
+            if (!process.WaitForExit(15000))
+            {
+                process.Kill(true);
+                throw new WingetException(L.T("Przekroczono czas sprawdzania instalacji Microsoft App Installer."));
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new WingetException(L.F("Nie udało się sprawdzić instalacji Microsoft App Installer: {0}", ex.Message));
+        }
+        var output = stdout.GetAwaiter().GetResult().Trim();
+        var error = stderr.GetAwaiter().GetResult().Trim();
+        if (process.ExitCode != 0)
+            throw new WingetException(L.F("Nie udało się sprawdzić instalacji Microsoft App Installer: {0}", error));
+        return output.Length > 0 ? output : null;
+    }
+
+    internal static bool IsTrustedWingetSignature(SignatureInfo signature) =>
+        signature.State == SignatureState.Valid &&
+        signature.Signer.Equals("Microsoft Corporation", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTrustedExecutable(string path)
+    {
+        if (!File.Exists(path)) return false;
+        try
+        {
+            var signature = Authenticode.Verify(path, checkRevocation: false);
+            return IsTrustedWingetSignature(signature);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return false;
+        }
     }
 
     private static ProcessStartInfo StartInfo(IEnumerable<string> args)
     {
         var exe = FindExecutable() ?? throw new WingetException(
-            L.T("Nie znaleziono programu winget. Zainstaluj „Instalator aplikacji” z Microsoft Store."));
+            L.T("Nie znaleziono prawidłowo podpisanego programu winget z pakietu Microsoft App Installer. Zainstaluj go z Microsoft Store."));
         var psi = new ProcessStartInfo(exe)
         {
             UseShellExecute = false, CreateNoWindow = true,
@@ -204,22 +273,50 @@ public static partial class WingetClient
     /// <summary>Pobiera instalator i jego manifest (.yaml) do katalogu, bez instalowania.</summary>
     public static Task<(int Code, string Output)> DownloadAsync(string packageId, string directory, string source = "",
                                                                string version = "", CancellationToken ct = default)
+        => RunAsync(DownloadArguments(packageId, directory, source, version), 900, ct);
+
+    internal static List<string> DownloadArguments(string packageId, string directory, string source, string version)
     {
         List<string> args = ["download", "--id", packageId, "--exact", "--download-directory", directory,
-                             "--accept-package-agreements", .. CommonArgs];
+                             "--skip-dependencies", "--accept-package-agreements", .. CommonArgs];
         if (source.Length > 0) args.AddRange(["--source", source]);
         if (version.Length > 0) args.AddRange(["--version", version]);
-        return RunAsync(args, 900, ct);
+        return args;
     }
 
     /// <summary>Uruchamia aktualizację. winget sam weryfikuje sumę SHA256 instalatora przed uruchomieniem.</summary>
     public static Task<int> UpgradeAsync(string packageId, Action<string> onOutput, string source = "",
-                                         string version = "", CancellationToken ct = default)
+                                         string version = "", CancellationToken ct = default) =>
+        RunStreamingAsync(UpgradeArguments(packageId, source, version), onOutput, ct);
+
+    public static Task<int> UpgradeVerifiedAsync(VerifiedInstaller installer, Action<string> onOutput,
+                                                  CancellationToken ct = default)
+    {
+        installer.Validate();
+        return RunStreamingAsync(VerifiedUpgradeArguments(installer.ManifestPath), onOutput, ct);
+    }
+
+    public static Task<int> InstallVerifiedAsync(VerifiedInstaller installer, Action<string> onOutput,
+                                                  bool allowDowngrade = false, CancellationToken ct = default)
+    {
+        installer.Validate();
+        return RunStreamingAsync(VerifiedInstallArguments(installer.ManifestPath, allowDowngrade), onOutput, ct);
+    }
+
+    internal static List<string> VerifiedUpgradeArguments(string manifestPath) =>
+        ["upgrade", "--manifest", manifestPath, "--silent", "--accept-package-agreements", .. CommonArgs];
+
+    internal static List<string> VerifiedInstallArguments(string manifestPath, bool allowDowngrade) =>
+        allowDowngrade
+            ? ["install", "--manifest", manifestPath, "--force", "--silent", "--accept-package-agreements", .. CommonArgs]
+            : ["install", "--manifest", manifestPath, "--silent", "--accept-package-agreements", .. CommonArgs];
+
+    internal static List<string> UpgradeArguments(string packageId, string source, string version)
     {
         List<string> args = ["upgrade", "--id", packageId, "--exact", "--silent", "--accept-package-agreements", .. CommonArgs];
         if (source.Length > 0) args.AddRange(["--source", source]);
         if (version.Length > 0) args.AddRange(["--version", version]);
-        return RunStreamingAsync(args, onOutput, ct);
+        return args;
     }
 
     /// <summary>

@@ -21,32 +21,51 @@
     .\Build-Package.ps1
 .EXAMPLE
     .\Build-Package.ps1 -PfxPath C:\certs\firma.pfx -PfxPassword (Read-Host -AsSecureString)
+.EXAMPLE
+    .\Build-Package.ps1 -PfxPath C:\certs\firma.pfx -PfxPassword (Read-Host -AsSecureString) -PublicRelease
 #>
 [CmdletBinding(DefaultParameterSetName = 'SelfSigned')]
 param(
     [Parameter(ParameterSetName = 'Pfx', Mandatory)] [string]$PfxPath,
     [Parameter(ParameterSetName = 'Pfx')] [SecureString]$PfxPassword,
     [Parameter(ParameterSetName = 'Store', Mandatory)] [string]$CertThumbprint,
+    [string[]]$PreviousSignerThumbprints = @(),
     [string]$Configuration = 'Release',
     [string]$UpdateRepository,
+    [string]$OutputDirectory,
+    [switch]$NoRestore,
     [switch]$NoZip,
     # Wydanie bez zaciemniania i kontroli integralności (np. do diagnozowania błędów).
     [switch]$NoProtect,
-    [switch]$NoPortable
+    [switch]$NoPortable,
+    [switch]$PublicRelease
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+if ($PublicRelease -and ($PSCmdlet.ParameterSetName -eq 'SelfSigned' -or $NoProtect)) {
+    throw 'Wydanie publiczne wymaga zaufanego certyfikatu Code Signing; certyfikat self-signed i -NoProtect nie są dozwolone.'
+}
 
 $Root = Split-Path $PSScriptRoot -Parent
+$RepositoryRoot = Split-Path $Root -Parent
 $Version = (Select-Xml -Path (Join-Path $Root 'Directory.Build.props') -XPath '//Version').Node.InnerText
 $ConfiguredUpdateRepository = (Select-Xml -Path (Join-Path $Root 'Directory.Build.props') -XPath '//UpdateRepository').Node.InnerText
 if ([string]::IsNullOrWhiteSpace($UpdateRepository)) { $UpdateRepository = $ConfiguredUpdateRepository }
 if (-not [string]::IsNullOrWhiteSpace($UpdateRepository) -and $UpdateRepository -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$') {
     throw 'UpdateRepository musi mieć format GitHub owner/name.'
 }
+$PreviousSignerThumbprints = @($PreviousSignerThumbprints | ForEach-Object { $_.Trim().ToUpperInvariant() } |
+    Where-Object { $_.Length -gt 0 } | Select-Object -Unique)
+foreach ($thumbprint in $PreviousSignerThumbprints) {
+    if ($thumbprint -notmatch '^[0-9A-F]{40}$') { throw 'Każdy dodatkowy certyfikat musi być odciskiem SHA-1 (40 znaków hex).' }
+}
 $PackageName = "BezpiecznyAktualizator-$Version-win-x64"
-$Dist = Join-Path $Root 'dist'
+$Dist = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    Join-Path $Root 'dist'
+} else {
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
+}
 $Stage = Join-Path $Dist $PackageName
 $Cache = Join-Path $Dist 'cache'
 $RuntimeMajor = '10.0'
@@ -129,6 +148,35 @@ function Get-SigningCertificate([string]$Mode) {
     }
 }
 
+function Assert-PublicReleaseCertificate($Certificate) {
+    if (-not $Certificate.HasPrivateKey) { throw 'Wydanie publiczne wymaga certyfikatu z dostępnym kluczem prywatnym.' }
+    if ([Convert]::ToBase64String($Certificate.SubjectName.RawData) -eq
+        [Convert]::ToBase64String($Certificate.IssuerName.RawData)) {
+        throw 'Certyfikat self-signed nie może być użyty do wydania publicznego.'
+    }
+    $now = Get-Date
+    if ($Certificate.NotBefore -gt $now -or $Certificate.NotAfter -le $now) {
+        throw 'Certyfikat do wydania publicznego nie jest obecnie ważny.'
+    }
+    $ekuExtension = $Certificate.Extensions | Where-Object { $_.Oid.Value -eq '2.5.29.37' } | Select-Object -First 1
+    if (-not $ekuExtension) { throw 'Certyfikat do wydania publicznego musi jawnie zezwalać na podpisywanie kodu.' }
+    $eku = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]$ekuExtension
+    if (-not ($eku.EnhancedKeyUsages | Where-Object { $_.Value -eq '1.3.6.1.5.5.7.3.3' })) {
+        throw 'Certyfikat do wydania publicznego nie ma rozszerzonego użycia Code Signing.'
+    }
+    $chain = New-Object System.Security.Cryptography.X509Certificates.X509Chain
+    try {
+        $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::Online
+        $chain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::ExcludeRoot
+        $chain.ChainPolicy.UrlRetrievalTimeout = [TimeSpan]::FromSeconds(15)
+        if (-not $chain.Build($Certificate)) {
+            $statuses = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() } | Select-Object -Unique)
+            throw "Nie można potwierdzić zaufanego łańcucha certyfikatu wydania publicznego: $($statuses -join ', ')."
+        }
+    }
+    finally { $chain.Dispose() }
+}
+
 function Invoke-Sign([string]$SignTool, [string[]]$SignArgs, [string[]]$Files) {
     foreach ($ts in $TimestampUrls) {
         $all = @('sign', '/fd', 'SHA256', '/tr', $ts, '/td', 'SHA256', '/d', 'Bezpieczny Aktualizator') + $SignArgs + $Files
@@ -145,6 +193,9 @@ function Assert-OwnSignature([string]$Path, [string]$Thumbprint) {
     if (-not $sig.SignerCertificate -or $sig.SignerCertificate.Thumbprint -ne $Thumbprint -or
         $sig.Status -in 'HashMismatch', 'NotSigned', 'NotSupportedFileFormat') {
         throw "Weryfikacja podpisu nie powiodła się: $Path ($($sig.Status))"
+    }
+    if ($PublicRelease -and $sig.Status -ne 'Valid') {
+        throw "Podpis wydania publicznego nie ma zaufanego łańcucha: $Path ($($sig.Status))"
     }
     if (-not $sig.TimeStamperCertificate) { throw "Brak znacznika czasu w podpisie: $Path" }
 }
@@ -192,8 +243,12 @@ function Copy-Script([string]$Source, [string]$Destination) {
 function Publish-App([string]$Output, [bool]$SelfContained) {
     $publishArgs = @('publish', (Join-Path $Root 'src\BezpiecznyAktualizator'), '-c', $Configuration, '-r', 'win-x64',
         '--self-contained', $SelfContained.ToString().ToLowerInvariant(), '-p:PublishSingleFile=true', '-p:DebugType=none', '-o', $Output)
+    if ($NoRestore) { $publishArgs += '--no-restore' }
     if ($SelfContained) { $publishArgs += '-p:IncludeNativeLibrariesForSelfExtract=true' }
-    if (-not $NoProtect) { $publishArgs += @('-p:Protect=true', "-p:SignerThumbprint=$($cert.Thumbprint)") }
+    if (-not $NoProtect) {
+        $publishArgs += @('-p:Protect=true', "-p:SignerThumbprint=$($cert.Thumbprint)",
+            "-p:SignerThumbprints=$($embeddedSigners -join ';')")
+    }
     if (-not [string]::IsNullOrWhiteSpace($UpdateRepository)) { $publishArgs += "-p:UpdateRepository=$UpdateRepository" }
     & $dotnet @publishArgs
     if ($LASTEXITCODE -ne 0) { throw 'dotnet publish zakończył się błędem.' }
@@ -225,19 +280,35 @@ function New-Zip([string]$Dir, [string]$Name) {
 
 $dotnet = Get-DotnetExe
 $signTool = Get-SignTool
+$dotnetRoot = Split-Path $dotnet
+$dotnetLicense = Join-Path $dotnetRoot 'LICENSE.txt'
+$dotnetThirdPartyNotices = Join-Path $dotnetRoot 'ThirdPartyNotices.txt'
+foreach ($notice in $dotnetLicense, $dotnetThirdPartyNotices) {
+    if (-not (Test-Path -LiteralPath $notice -PathType Leaf)) {
+        throw "Brak pliku licencji środowiska .NET: $notice"
+    }
+}
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'
+
+# Validate release credentials before replacing any staged package files.
+Write-Step 'Certyfikat do podpisywania kodu'
+$signing = Get-SigningCertificate $PSCmdlet.ParameterSetName
+$cert = $signing.Cert
+if ($PublicRelease) { Assert-PublicReleaseCertificate $cert }
+Write-Host "    $($cert.Subject)  odcisk: $($cert.Thumbprint)  ważny do: $($cert.NotAfter.ToString('yyyy-MM-dd'))"
+$embeddedSigners = @(($PreviousSignerThumbprints + $cert.Thumbprint.ToUpperInvariant()) |
+    Where-Object { $_.Length -gt 0 } | Select-Object -Unique)
+$certBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
 
 Write-Step "Przygotowanie katalogu $Stage"
 if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
 foreach ($d in $Stage, $Cache, "$Stage\app", "$Stage\dotnet", "$Stage\cert") { New-Item -ItemType Directory $d -Force | Out-Null }
 
-# Certyfikat jest potrzebny przed publikacją: jego odcisk zostaje wbudowany w program (kontrola integralności).
-Write-Step 'Certyfikat do podpisywania kodu'
-$signing = Get-SigningCertificate $PSCmdlet.ParameterSetName
-$cert = $signing.Cert
-Write-Host "    $($cert.Subject)  odcisk: $($cert.Thumbprint)  ważny do: $($cert.NotAfter.ToString('yyyy-MM-dd'))"
-$certBytes = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
 [IO.File]::WriteAllBytes((Join-Path $Stage 'cert\BezpiecznyAktualizator.cer'), $certBytes)
+Copy-Item (Join-Path $RepositoryRoot 'LICENSE') (Join-Path $Stage 'LICENSE')
+Copy-Item (Join-Path $PSScriptRoot 'THIRD-PARTY-NOTICES.txt') (Join-Path $Stage 'THIRD-PARTY-NOTICES.txt')
+Copy-Item $dotnetLicense (Join-Path $Stage 'DOTNET-LICENSE.txt')
+Copy-Item $dotnetThirdPartyNotices (Join-Path $Stage 'DOTNET-THIRD-PARTY-NOTICES.txt')
 
 $protection = if ($NoProtect) { 'bez ochrony' } else { 'wersja chroniona: zaciemnianie kodu, kontrola integralności' }
 Write-Step "Publikacja aplikacji (pojedynczy plik, zależny od .NET Desktop Runtime; $protection)"
@@ -290,6 +361,9 @@ if (-not $NoPortable) {
     foreach ($d in $Portable, "$Portable\cert") { New-Item -ItemType Directory $d -Force | Out-Null }
     Copy-Item $msiSourceExe (Join-Path $Portable 'BezpiecznyAktualizator.exe')
     [IO.File]::WriteAllBytes((Join-Path $Portable 'cert\BezpiecznyAktualizator.cer'), $certBytes)
+    foreach ($notice in 'LICENSE', 'THIRD-PARTY-NOTICES.txt', 'DOTNET-LICENSE.txt', 'DOTNET-THIRD-PARTY-NOTICES.txt') {
+        Copy-Item (Join-Path $Stage $notice) $Portable
+    }
     Copy-Script (Join-Path $PSScriptRoot 'CZYTAJ-PRZENOSNA.txt') (Join-Path $Portable 'CZYTAJ.txt')
     Copy-Script (Join-Path $PSScriptRoot 'INSTRUKCJA.txt') (Join-Path $Portable 'INSTRUKCJA.txt')
     Write-Checksums $Portable
@@ -304,8 +378,14 @@ $msiOutput = Join-Path $msiBuild 'out'
 $msiIntermediate = Join-Path $msiBuild 'obj'
 foreach ($dir in $msiOutput, $msiIntermediate) { New-Item -ItemType Directory $dir -Force | Out-Null }
 $wixProject = Join-Path $PSScriptRoot 'msi\BezpiecznyAktualizator.wixproj'
-& $dotnet build $wixProject -c $Configuration -p:Platform=x64 "-p:PackageVersion=$Version" `
+$noRestoreArgs = @()
+if ($NoRestore) { $noRestoreArgs += '--no-restore' }
+& $dotnet build $wixProject -c $Configuration @noRestoreArgs -p:Platform=x64 "-p:PackageVersion=$Version" `
     "-p:AppExePath=$msiSourceExe" "-p:CertificatePath=$(Join-Path $Stage 'cert\BezpiecznyAktualizator.cer')" `
+    "-p:LicensePath=$(Join-Path $Stage 'LICENSE')" `
+    "-p:ThirdPartyNoticesPath=$(Join-Path $Stage 'THIRD-PARTY-NOTICES.txt')" `
+    "-p:DotnetLicensePath=$(Join-Path $Stage 'DOTNET-LICENSE.txt')" `
+    "-p:DotnetThirdPartyNoticesPath=$(Join-Path $Stage 'DOTNET-THIRD-PARTY-NOTICES.txt')" `
     "-p:OutputPath=$msiOutput\" "-p:IntermediateOutputPath=$msiIntermediate\"
 if ($LASTEXITCODE -ne 0) { throw 'Budowanie instalatora MSI przez WiX zakończyło się błędem.' }
 $builtMsi = Get-ChildItem $msiBuild -Filter '*.msi' -Recurse | Select-Object -First 1

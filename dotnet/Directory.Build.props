@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <Version>2.1.0</Version>
+    <Version>2.1.2</Version>
     <!-- Public GitHub owner/repository used for in-app updates. -->
     <UpdateRepository>Cragenos/Bezpieczny_Aktualizator</UpdateRepository>
     <Authors>Cragenos</Authors>

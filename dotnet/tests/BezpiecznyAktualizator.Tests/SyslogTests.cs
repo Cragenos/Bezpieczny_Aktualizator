@@ -101,6 +101,38 @@ public partial class SyslogTests
         }
     }
 
+    [Fact]
+    public void ReadsRecentWarningsAndErrorsFromCurrentAndRotatedLogs()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "BA-syslog-issues-" + Guid.NewGuid().ToString("N"));
+        var oldDir = Syslog.Directory;
+        try
+        {
+            Syslog.Configure(dir);
+            Directory.CreateDirectory(dir);
+            File.WriteAllLines(Syslog.FilePath,
+            [
+                Syslog.Format(SyslogSeverity.Warning, "WARN", "new warning", Time.AddMinutes(2), 1, "en"),
+                Syslog.Format(SyslogSeverity.Informational, "INFO", "not an issue", Time.AddMinutes(3), 2, "en"),
+                Syslog.Format(SyslogSeverity.Error, "ERROR", "new error", Time.AddMinutes(4), 3, "en"),
+            ]);
+            File.WriteAllLines(Syslog.FilePath + ".1",
+                [Syslog.Format(SyslogSeverity.Error, "ERROR", "old error", Time, 4, "en")]);
+
+            var issues = Syslog.ReadRecentIssues(3);
+            Assert.Equal(3, issues.Count);
+            Assert.Contains("new error", issues[0]);
+            Assert.Contains("new warning", issues[1]);
+            Assert.Contains("old error", issues[2]);
+            Assert.DoesNotContain(issues, line => line.Contains("not an issue", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Syslog.Configure(oldDir);
+            Directory.Delete(dir, true);
+        }
+    }
+
     // RFC 5424: PRI VERSION SP TIMESTAMP SP HOSTNAME SP APP-NAME SP PROCID SP MSGID SP STRUCTURED-DATA [SP MSG]
     [GeneratedRegex("""^<(?<pri>\d{1,3})>1 (?<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})) (?<host>[!-~]{1,255}) (?<app>[!-~]{1,48}) (?<proc>[!-~]{1,128}) (?<msgid>[!-~]{1,32}) (?<sd>-|(?:\[[^ =\]"]{1,32}(?: [^ =\]"]{1,32}="(?:[^"\\\]]|\\.)*")*\])+)(?: (?<msg>.*))?$""")]
     private static partial Regex Rfc5424();

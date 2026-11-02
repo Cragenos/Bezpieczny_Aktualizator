@@ -3,6 +3,7 @@ using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Scheduling;
 using BezpiecznyAktualizator.Core.Security;
+using BezpiecznyAktualizator.Core.Updates;
 
 namespace BezpiecznyAktualizator.Tests;
 
@@ -14,7 +15,7 @@ public class ScheduleTests
     public void TaskXmlIsValidIdleTaskForLoggedOnUser()
     {
         var xml = ScheduledTask.BuildXml(@"C:\Program Files\A & B\BezpiecznyAktualizator.exe", "S-1-5-21-1-2-3-1001",
-                                         new ScheduleOptions { IdleMinutes = 15 });
+                                         new ScheduleOptions { IdleMinutes = 15, SkipOnBattery = false });
         var doc = XDocument.Parse(xml);
         var task = doc.Root!;
         Assert.Equal(Ns + "Task", task.Name);
@@ -28,7 +29,7 @@ public class ScheduleTests
         var settings = task.Element(Ns + "Settings")!;
         Assert.Equal("PT15M", settings.Element(Ns + "IdleSettings")!.Element(Ns + "Duration")!.Value);
         Assert.Equal("false", settings.Element(Ns + "IdleSettings")!.Element(Ns + "StopOnIdleEnd")!.Value);
-        Assert.Equal("true", settings.Element(Ns + "DisallowStartIfOnBatteries")!.Value);
+        Assert.Equal("false", settings.Element(Ns + "DisallowStartIfOnBatteries")!.Value);
         Assert.Equal("IgnoreNew", settings.Element(Ns + "MultipleInstancesPolicy")!.Value);
 
         var exec = task.Element(Ns + "Actions")!.Element(Ns + "Exec")!;
@@ -44,6 +45,53 @@ public class ScheduleTests
         Assert.Equal(1, o.IdleMinutes);
         Assert.Equal(720, o.MinIntervalHours);
     }
+
+    [Fact]
+    public void WindowsUpdateSchedulingIsDisabledByDefaultAndOnlyInstallsAcceptedMandatoryUpdates()
+    {
+        var defaults = new ScheduleOptions().Normalize();
+        Assert.False(defaults.CheckWindowsUpdates);
+        Assert.False(defaults.InstallWindowsUpdates);
+
+        var update = new WindowsUpdateItem { IsMandatory = true, EulaAccepted = true };
+        Assert.True(ScheduledWindowsUpdatePolicy.IsInstallCandidate(update));
+        Assert.False(ScheduledWindowsUpdatePolicy.IsInstallCandidate(
+            new WindowsUpdateItem { IsMandatory = false, EulaAccepted = true }));
+        Assert.False(ScheduledWindowsUpdatePolicy.IsInstallCandidate(
+            new WindowsUpdateItem { IsMandatory = true, EulaAccepted = false }));
+    }
+
+    [Theory]
+    [InlineData("08:00", "17:00", "2026-05-01T08:00:00", true)]
+    [InlineData("08:00", "17:00", "2026-05-01T16:59:00", true)]
+    [InlineData("08:00", "17:00", "2026-05-01T17:00:00", false)]
+    [InlineData("22:00", "06:00", "2026-05-01T23:00:00", true)]
+    [InlineData("22:00", "06:00", "2026-05-01T05:59:00", true)]
+    [InlineData("22:00", "06:00", "2026-05-01T12:00:00", false)]
+    [InlineData("00:00", "00:00", "2026-05-01T12:00:00", true)]
+    public void MaintenanceWindowSupportsNormalAndOvernightWindows(string start, string end, string now, bool expected)
+    {
+        var options = new ScheduleOptions { WindowStart = start, WindowEnd = end }.Normalize();
+        Assert.Equal(expected, options.IsWithinMaintenanceWindow(DateTimeOffset.Parse(now)));
+    }
+
+    [Fact]
+    public void RetryDelayUsesBoundedLinearBackoff()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(30), ScheduleOptions.RetryDelay(1));
+        Assert.Equal(TimeSpan.FromSeconds(90), ScheduleOptions.RetryDelay(3));
+        Assert.Equal(TimeSpan.FromSeconds(150), ScheduleOptions.RetryDelay(8));
+    }
+
+    [Theory]
+    [InlineData(0, MeteredNetworkState.Unknown)]
+    [InlineData(1, MeteredNetworkState.Unmetered)]
+    [InlineData(2, MeteredNetworkState.Metered)]
+    [InlineData(4, MeteredNetworkState.Metered)]
+    [InlineData(65537, MeteredNetworkState.Metered)]
+    [InlineData(262145, MeteredNetworkState.Metered)]
+    public void NetworkCostIsClassifiedConservatively(uint cost, MeteredNetworkState expected) =>
+        Assert.Equal(expected, SystemConditions.ClassifyNetworkCost(cost));
 
     [Fact]
     public void OnlyUpgradableNotExcludedSoftwareIsCandidate()

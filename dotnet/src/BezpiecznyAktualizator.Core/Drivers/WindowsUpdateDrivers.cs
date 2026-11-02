@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using BezpiecznyAktualizator.Core.Localization;
+using BezpiecznyAktualizator.Core.Updates;
 
 namespace BezpiecznyAktualizator.Core.Drivers;
 
@@ -31,20 +32,8 @@ public static partial class WindowsUpdateDrivers
 {
     public const string InstallArgument = "--install-drivers";
     private const string Criteria = "IsInstalled=0 and Type='Driver' and IsHidden=0";
-    private const string ClientId = "BezpiecznyAktualizator";
-
-    private static dynamic CreateCom(string progId)
-    {
-        var type = Type.GetTypeFromProgID(progId) ?? throw new DriverException(L.F("Brak komponentu COM {0}.", progId));
-        return Activator.CreateInstance(type) ?? throw new DriverException(L.F("Nie można utworzyć {0}.", progId));
-    }
-
-    private static dynamic CreateSession()
-    {
-        var session = CreateCom("Microsoft.Update.Session");
-        session.ClientApplicationID = ClientId;
-        return session;
-    }
+    private static dynamic CreateCom(string progId) => WindowsUpdateInterop.CreateCom(progId);
+    private static dynamic CreateSession() => WindowsUpdateInterop.CreateSession();
 
     private static List<dynamic> SearchRaw(dynamic session)
     {

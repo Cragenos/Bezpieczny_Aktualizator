@@ -30,7 +30,7 @@ public partial class AboutWindow : Window
         var (signature, thumbprint) = await Task.Run(() => path.Length == 0
             ? (new SignatureInfo(SignatureState.Unsigned, 0, ""), "")
             : (Authenticode.Verify(path, checkRevocation: false), Authenticode.SignerThumbprint(path)));
-        var expected = SelfProtection.ExpectedSigner;
+        var expected = SelfProtection.ExpectedSigners;
         var tampered = IntegrityCheck.Problem(signature, thumbprint, expected) is not null;
 
         SecurityGrid.Children.Clear();

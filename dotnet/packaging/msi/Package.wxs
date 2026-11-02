@@ -31,6 +31,18 @@
       <Component Id="PublisherCertificate" Guid="*">
         <File Id="PublisherCert" Source="$(var.CertificatePath)" KeyPath="yes" />
       </Component>
+      <Component Id="ProjectLicense" Guid="*">
+        <File Id="License" Source="$(var.LicensePath)" KeyPath="yes" />
+      </Component>
+      <Component Id="ThirdPartyNotices" Guid="*">
+        <File Id="ThirdPartyNoticesFile" Source="$(var.ThirdPartyNoticesPath)" KeyPath="yes" />
+      </Component>
+      <Component Id="DotnetLicense" Guid="*">
+        <File Id="DotnetLicenseFile" Source="$(var.DotnetLicensePath)" KeyPath="yes" />
+      </Component>
+      <Component Id="DotnetThirdPartyNotices" Guid="*">
+        <File Id="DotnetThirdPartyNoticesFile" Source="$(var.DotnetThirdPartyNoticesPath)" KeyPath="yes" />
+      </Component>
       <Component Id="InstallMetadata" Guid="*">
         <RegistryValue Root="HKLM"
                        Key="Software\Cragenos\BezpiecznyAktualizator"

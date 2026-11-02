@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Models;
+using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Risk;
 using BezpiecznyAktualizator.Core.Scheduling;
 using BezpiecznyAktualizator.Core.Security;
@@ -11,6 +12,52 @@ namespace BezpiecznyAktualizator.Tests;
 
 public class NvdTests
 {
+    [Fact]
+    public void EpssParsesScoresOnlyForValidCveIdsAndRanges()
+    {
+        const string json = """
+            {"data":[
+              {"cve":"CVE-2025-1234","epss":"0.12345","percentile":"0.98765"},
+              {"cve":"not-a-cve","epss":"0.8","percentile":"0.9"},
+              {"cve":"CVE-2025-1235","epss":"1.2","percentile":"0.5"},
+              {"cve":"CVE-2025-1236","epss":"0.2","percentile":"invalid"}
+            ]}
+            """;
+        var parsed = EpssClient.Parse(JsonNode.Parse(json)!);
+        var score = Assert.Single(parsed);
+        Assert.Equal("CVE-2025-1234", score.Id);
+        Assert.Equal(0.12345, score.Score);
+        Assert.Equal(0.98765, score.Percentile);
+    }
+
+    [Theory]
+    [InlineData("https://github.com/owner/project", "owner/project")]
+    [InlineData("https://github.com/owner/project.git", "owner/project")]
+    [InlineData("https://github.com/owner/project/tree/main", null)]
+    [InlineData("http://github.com/owner/project", null)]
+    [InlineData("https://github.com.evil.example/owner/project", null)]
+    [InlineData("https://github.com/owner/project?redirect=evil", null)]
+    [InlineData("https://github.com/../project", null)]
+    public void OsvUsesOnlyExactHttpsGitHubRepository(string homepage, string? expected) =>
+        Assert.Equal(expected, OsvClient.GitHubRepository(homepage));
+
+    [Fact]
+    public void OsvParsesUniqueFindingsAndCveAliases()
+    {
+        const string json = """
+            {"vulns":[
+              {"id":"GHSA-1234-abcd-efgh","summary":"A vulnerability","aliases":["CVE-2025-1234"]},
+              {"id":"GHSA-1234-abcd-efgh","summary":"duplicate","aliases":[]},
+              {"id":"OSV-2025-1","details":"Details only"}
+            ]}
+            """;
+        var parsed = OsvClient.Parse(JsonNode.Parse(json)!);
+        Assert.Equal(2, parsed.Count);
+        Assert.Equal("A vulnerability", parsed[0].Summary);
+        Assert.Equal(["CVE-2025-1234"], parsed[0].Aliases);
+        Assert.Equal("Details only", parsed[1].Summary);
+    }
+
     [Theory]
     [InlineData("7-Zip 23.01 (x64)", "7-Zip")]
     [InlineData("Notepad++ (64-bit x64)", "Notepad++")]
@@ -341,8 +388,15 @@ public class DefenderTests
     [Fact]
     public void ScheduledInstallWithoutScanRequiresExplicitConsent()
     {
-        var noScan = new InstallerVerification { Completed = true, DefenderUnavailable = true };
-        var blockedNoScan = new InstallerVerification { Completed = true, DefenderUnavailable = true };
+        using var cleanArtifact = TestVerifiedInstaller();
+        using var noScanArtifact = TestVerifiedInstaller();
+        using var blockedArtifact = TestVerifiedInstaller();
+        using var storeArtifact = TestVerifiedInstaller();
+        var noScan = new InstallerVerification { Completed = true, DefenderUnavailable = true, VerifiedInstaller = noScanArtifact };
+        var blockedNoScan = new InstallerVerification
+        {
+            Completed = true, DefenderUnavailable = true, VerifiedInstaller = blockedArtifact,
+        };
         blockedNoScan.Checks.Add(new Check(L.Txt("x"), CheckStatus.Fail, null));
         var incomplete = new InstallerVerification { DefenderUnavailable = true };
 
@@ -350,12 +404,79 @@ public class DefenderTests
         Assert.True(SilentUpdatePolicy.MayInstall(noScan, new ScheduleOptions { AllowWithoutDefenderScan = true }));
         Assert.False(SilentUpdatePolicy.MayInstall(blockedNoScan, new ScheduleOptions { AllowWithoutDefenderScan = true }));
         Assert.False(SilentUpdatePolicy.MayInstall(incomplete, new ScheduleOptions { AllowWithoutDefenderScan = true }));
-        Assert.True(SilentUpdatePolicy.MayInstall(new InstallerVerification { Completed = true }, new ScheduleOptions()));
+        Assert.True(SilentUpdatePolicy.MayInstall(
+            new InstallerVerification { Completed = true, VerifiedInstaller = cleanArtifact }, new ScheduleOptions()));
+        Assert.False(SilentUpdatePolicy.MayInstall(
+            new InstallerVerification { Completed = true, StoreManaged = true, VerifiedInstaller = storeArtifact },
+            new ScheduleOptions { AllowWithoutDefenderScan = true }));
+        Assert.False(SilentUpdatePolicy.IsCandidate(new Software
+        {
+            WingetId = "test.package", WingetSource = "msstore", Version = "1.0", AvailableVersion = "1.1",
+            WingetDetected = true,
+        }, new UpdatePolicies(), DateTimeOffset.UtcNow));
+    }
+
+    private static VerifiedInstaller TestVerifiedInstaller()
+    {
+        const string yaml = """
+            PackageIdentifier: test.package
+            PackageVersion: 1.0
+            Installers:
+              - InstallerUrl: https://example.org/setup.exe
+                InstallerSha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+            """;
+        var directory = Path.Combine(Path.GetTempPath(), "ba-policy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "manifest.yaml");
+        File.WriteAllText(path, yaml);
+        var manifestSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+        return new VerifiedInstaller(directory, path, "test.package", "1.0",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", manifestSha256);
     }
 }
 
 public class RollbackTests
 {
+    [Fact]
+    public void CorruptHistoryIsReportedAndNeverOverwritten()
+    {
+        var original = UpdateHistory.FilePath;
+        var path = Path.Combine(Path.GetTempPath(), $"ba-history-corrupt-{Guid.NewGuid():N}.json");
+        const string corrupt = "{ not valid json";
+        UpdateHistory.FilePath = path;
+        try
+        {
+            File.WriteAllText(path, corrupt);
+            Assert.Throws<InvalidDataException>(() => UpdateHistory.Load());
+            Assert.Throws<InvalidDataException>(() => UpdateHistory.Add(new UpdateRecord { Name = "Do not replace" }));
+            Assert.Equal(corrupt, File.ReadAllText(path));
+        }
+        finally
+        {
+            UpdateHistory.FilePath = original;
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentHistoryWritesAreSerialized()
+    {
+        var original = UpdateHistory.FilePath;
+        var directory = Path.Combine(Path.GetTempPath(), $"ba-history-concurrent-{Guid.NewGuid():N}");
+        UpdateHistory.FilePath = Path.Combine(directory, "history.json");
+        try
+        {
+            await Task.WhenAll(Enumerable.Range(0, 20).Select(index => Task.Run(() =>
+                UpdateHistory.Add(new UpdateRecord { Name = $"App {index}", WingetId = $"app.{index}" }))));
+            Assert.Equal(20, UpdateHistory.Load().Count);
+        }
+        finally
+        {
+            UpdateHistory.FilePath = original;
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void ParseVersionsFromWingetShow()
     {

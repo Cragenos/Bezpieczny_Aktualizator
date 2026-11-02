@@ -21,7 +21,8 @@ public static class SoftwareAssessor
             checks.Add(new Check(L.Txt("Źródło: oficjalne repozytorium winget-pkgs (Microsoft)"), CheckStatus.Ok,
                 L.Txt("Manifesty przechodzą automatyczną walidację, skan antywirusowy i przegląd przed publikacją.")));
         else if (isStore)
-            checks.Add(new Check(L.Txt("Źródło: Microsoft Store"), CheckStatus.Ok, L.Txt("Pakiety są certyfikowane i podpisane przez Microsoft.")));
+            checks.Add(new Check(L.Txt("Źródło: Microsoft Store"), CheckStatus.Warn,
+                L.Txt("Sklep zarządza dostarczaniem, ale aplikacje mogą pochodzić od zewnętrznych wydawców i nie są tu skanowane osobno.")));
         else
             checks.Add(new Check(L.Txt("Źródło: {0}", source.Length > 0 ? source : L.Txt("nieznane")), CheckStatus.Warn,
                 L.Txt("Niestandardowe źródło winget - sprawdź, kto nim zarządza.")));

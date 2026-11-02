@@ -13,6 +13,14 @@ public sealed record CveItem(string Id, double Score, string Severity, string De
 {
     [JsonIgnore]
     public string Url => "https://nvd.nist.gov/vuln/detail/" + Id;
+    public double? EpssScore { get; init; }
+    public double? EpssPercentile { get; init; }
+}
+
+public sealed record OsvItem(string Id, string Summary, IReadOnlyList<string> Aliases)
+{
+    [JsonIgnore]
+    public string Url => "https://osv.dev/vulnerability/" + Uri.EscapeDataString(Id);
 }
 
 /// <summary>Wynik sprawdzenia podatności zainstalowanej wersji programu.</summary>
@@ -24,13 +32,19 @@ public sealed class VulnerabilityReport
     public string CpeOrigin { get; set; } = "";
     public string Version { get; set; } = "";
     public List<CveItem> Items { get; set; } = [];
+    public string OsvRepository { get; set; } = "";
+    public string OsvConfidence { get; set; } = "";
+    public List<OsvItem> OsvItems { get; set; } = [];
+    public DateTimeOffset? EpssCheckedAt { get; set; }
+    [JsonIgnore] public LocText? OsvError { get; set; }
+    [JsonIgnore] public string? EpssError { get; set; }
     public DateTimeOffset CheckedAt { get; set; }
 
     [JsonIgnore] public LocText? Error { get; set; }
     [JsonIgnore] public bool Checked => Error is null && Cpe.Length > 0;
     [JsonIgnore] public double MaxScore => Items.Count == 0 ? 0 : Items.Max(i => i.Score);
     [JsonIgnore] public bool Exploited => Items.Any(i => i.Exploited);
-    [JsonIgnore] public bool IsUrgent => Items.Count > 0;
+    [JsonIgnore] public bool IsUrgent => Items.Count > 0 || OsvItems.Count > 0;
 }
 
 public enum LifecycleState { Unknown, Supported, Eol, Abandoned }

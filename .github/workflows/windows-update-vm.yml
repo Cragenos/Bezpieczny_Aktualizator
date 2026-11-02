@@ -1,0 +1,34 @@
+name: Windows Update VM integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_dedicated_vm:
+        description: Run the scan-only integration test on a dedicated, disposable Windows VM
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  offline-catalog-scan:
+    if: inputs.confirm_dedicated_vm
+    runs-on: [self-hosted, windows, windows-update-vm]
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run trusted App Installer WinGet integration test
+        run: dotnet test dotnet\tests\BezpiecznyAktualizator.Tests\BezpiecznyAktualizator.Tests.csproj --configuration Release --filter "Category=VmIntegration"
+
+      - name: Scan with Microsoft's signed offline catalog
+        shell: pwsh
+        run: .\tests\windows-update\Invoke-OfflineCatalogScan.ps1

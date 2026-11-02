@@ -5,10 +5,13 @@ using System.Security;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Globalization;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Security;
+using BezpiecznyAktualizator.Core.Store;
+using BezpiecznyAktualizator.Core.Updates;
 
 namespace BezpiecznyAktualizator.Core.Scheduling;
 
@@ -27,6 +30,11 @@ public sealed class ScheduleOptions
     public int IdleMinutes { get; set; } = 10;
     /// <summary>Minimalny odstęp między kolejnymi uruchomieniami (bezczynność występuje wiele razy dziennie).</summary>
     public int MinIntervalHours { get; set; } = 24;
+    public string WindowStart { get; set; } = "00:00";
+    public string WindowEnd { get; set; } = "00:00";
+    public bool SkipOnBattery { get; set; } = true;
+    public bool SkipOnMeteredNetwork { get; set; } = true;
+    public int MaxRetries { get; set; } = 2;
     /// <summary>Ustawienie z wcześniejszych wersji - przenoszone do <see cref="UpdatePolicies.AutoTrust"/>.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? AllowMediumTrust { get; set; }
@@ -37,6 +45,8 @@ public sealed class ScheduleOptions
     public bool AllowWithoutDefenderScan { get; set; }
     public bool CheckDrivers { get; set; } = true;
     public bool InstallDrivers { get; set; }
+    public bool CheckWindowsUpdates { get; set; }
+    public bool InstallWindowsUpdates { get; set; }
     /// <summary>Ustawienie z wcześniejszych wersji - przenoszone do <see cref="UpdatePolicies.Excluded"/>.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? Excluded { get; set; }
@@ -46,9 +56,29 @@ public sealed class ScheduleOptions
     {
         IdleMinutes = Math.Clamp(IdleMinutes, 1, 240);
         MinIntervalHours = Math.Clamp(MinIntervalHours, 1, 24 * 30);
+        WindowStart = NormalizeTime(WindowStart);
+        WindowEnd = NormalizeTime(WindowEnd);
+        MaxRetries = Math.Clamp(MaxRetries, 0, 3);
         if (!Enum.IsDefined(Mode)) Mode = ScheduleMode.CheckOnly;
         return this;
     }
+
+    public bool IsWithinMaintenanceWindow(DateTimeOffset now)
+    {
+        var start = TimeOnly.ParseExact(WindowStart, "HH:mm", CultureInfo.InvariantCulture);
+        var end = TimeOnly.ParseExact(WindowEnd, "HH:mm", CultureInfo.InvariantCulture);
+        var time = TimeOnly.FromDateTime(now.LocalDateTime);
+        if (start == end) return true;
+        return start < end ? time >= start && time < end : time >= start || time < end;
+    }
+
+    public static TimeSpan RetryDelay(int failedAttempt) =>
+        TimeSpan.FromSeconds(Math.Clamp(failedAttempt, 1, 5) * 30);
+
+    private static string NormalizeTime(string? value) =>
+        TimeOnly.TryParseExact(value, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time)
+            ? time.ToString("HH:mm", CultureInfo.InvariantCulture)
+            : "00:00";
 
     /// <summary>Przenosi wykluczenia i poziom zaufania z dawnych ustawień harmonogramu do zasad; zwraca true, jeśli coś przeniesiono.</summary>
     public bool MigrateTo(UpdatePolicies policies)
@@ -69,14 +99,24 @@ public sealed class ScheduleOptions
 public static class SilentUpdatePolicy
 {
     /// <summary>Program ma aktualizację w repozytorium, nie jest wykluczony, a jego wersja nie jest wstrzymana.</summary>
-    public static bool IsCandidate(Software s, UpdatePolicies p, DateTimeOffset now) => s.CanUpgrade && p.CheckRules(s, now).Allowed;
+    public static bool IsCandidate(Software s, UpdatePolicies p, DateTimeOffset now) =>
+        s.CanUpgrade && !IsStoreManaged(s) && p.CheckRules(s, now).Allowed;
+
+    public static bool IsStoreManaged(Software s) =>
+        string.Equals(s.WingetSource, MicrosoftStoreClient.SourceName, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Instalator musi przejść wszystkie kontrole i skanowanie Defender; bez skanowania tylko wtedy,
     /// gdy użytkownik wyraźnie na to zezwolił w ustawieniach harmonogramu.
     /// </summary>
     public static bool MayInstall(InstallerVerification v, ScheduleOptions o) =>
-        v.Passed || o.AllowWithoutDefenderScan && v.PassedWithoutScan;
+        !v.StoreManaged && v.VerifiedInstaller is not null &&
+        (v.Passed || o.AllowWithoutDefenderScan && v.PassedWithoutScan);
+}
+
+public static class ScheduledWindowsUpdatePolicy
+{
+    public static bool IsInstallCandidate(WindowsUpdateItem update) => update.IsMandatory && update.EulaAccepted;
 }
 
 /// <summary>Wynik ostatniego cichego uruchomienia (%LOCALAPPDATA%\BezpiecznyAktualizator\schedule-state.json).</summary>
@@ -98,8 +138,16 @@ public sealed class ScheduleState
     public List<string> Failed { get; set; } = [];
     public int DriverUpdates { get; set; } = -1;
     public int DriversInstalled { get; set; }
+    public bool WindowsUpdateChecked { get; set; }
+    public int WindowsUpdates { get; set; }
+    public int WindowsUpdatesInstalled { get; set; }
+    public bool WindowsUpdateRebootRequired { get; set; }
+    public string WindowsUpdateError { get; set; } = "";
+    public int Retries { get; set; }
     public bool Interrupted { get; set; }
     public string Error { get; set; } = "";
+    public DateTimeOffset? LastAttempt { get; set; }
+    public string SkipReason { get; set; } = "";
 
     /// <summary>Czy od ostatniego uruchomienia minął wymagany odstęp.</summary>
     public bool IsDue(DateTimeOffset now, int minIntervalHours) =>
@@ -125,13 +173,24 @@ public sealed class ScheduleState
 
     public string Summary()
     {
-        if (LastRun is not { } run) return L.T("Ciche sprawdzanie jeszcze się nie odbyło.");
+        if (LastAttempt is { } latestAttempt && SkipReason.Length > 0 &&
+            (LastRun is null || latestAttempt > LastRun))
+            return L.F("Ostatnia próba cichego sprawdzania: {0}. Pominięto: {1}",
+                latestAttempt.LocalDateTime.ToString("g"), SkipReason);
+        if (LastRun is not { } run)
+            return L.T("Ciche sprawdzanie jeszcze się nie odbyło.");
         var text = L.F("Ostatnie ciche sprawdzanie: {0}.", run.LocalDateTime.ToString("g")) + " " +
                    (Installed
                        ? L.F("Dostępne aktualizacje: {0}, zainstalowano: {1}, pominięto: {2}, niepowodzenia: {3}.",
                              Updates, Updated.Count, Skipped.Count, Failed.Count)
                        : L.F("Dostępne aktualizacje: {0} (bez instalacji).", Updates));
         if (DriverUpdates >= 0) text += " " + L.F("Nowsze sterowniki: {0}, zainstalowano: {1}.", DriverUpdates, DriversInstalled);
+        if (WindowsUpdateChecked)
+            text += " " + L.F("Windows Update: brakujące aktualizacje: {0}, zainstalowano: {1}.",
+                WindowsUpdates, WindowsUpdatesInstalled);
+        if (WindowsUpdateRebootRequired) text += " " + L.T("Windows Update wymaga ponownego uruchomienia komputera.");
+        if (WindowsUpdateError.Length > 0) text += " " + L.F("Błąd Windows Update: {0}", WindowsUpdateError);
+        if (Retries > 0) text += " " + L.F("Ponowienia nieudanych instalacji: {0}.", Retries);
         if (Interrupted) text += " " + L.T("Przerwano, ponieważ użytkownik wrócił do komputera.");
         if (Error.Length > 0) text += " " + L.F("Błąd: {0}", Error);
         return text;
@@ -203,7 +262,7 @@ public static class ScheduledTask
               </Principals>
               <Settings>
                 <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-                <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
+                <DisallowStartIfOnBatteries>{options.SkipOnBattery.ToString().ToLowerInvariant()}</DisallowStartIfOnBatteries>
                 <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
                 <AllowHardTerminate>true</AllowHardTerminate>
                 <StartWhenAvailable>false</StartWhenAvailable>

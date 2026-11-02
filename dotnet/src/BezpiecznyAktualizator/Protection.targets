@@ -14,6 +14,9 @@
   <PropertyGroup Condition="'$(Protect)' == 'true' and '$(SelfContained)' == 'true' and '$(PublishSingleFile)' == 'true'">
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
+  <ItemGroup Condition="'$(Protect)' == 'true' and '$(SignerThumbprints)' != ''">
+    <AssemblyMetadata Include="SignerThumbprints" Value="$(SignerThumbprints)" />
+  </ItemGroup>
   <ItemGroup Condition="'$(Protect)' == 'true' and '$(SignerThumbprint)' != ''">
     <AssemblyMetadata Include="SignerThumbprint" Value="$(SignerThumbprint)" />
   </ItemGroup>

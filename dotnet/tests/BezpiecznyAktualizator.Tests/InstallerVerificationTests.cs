@@ -1,4 +1,5 @@
 using BezpiecznyAktualizator.Core.Security;
+using BezpiecznyAktualizator.Core.Winget;
 
 namespace BezpiecznyAktualizator.Tests;
 
@@ -122,6 +123,7 @@ public class InstallerVerifierTests
                             "Installers:\n  InstallerType: wix\n  InstallerSha256: 3FE4AB99FA15629C652944309A2B2BC6E41FC933FC6B63F5DF1EBCF3AEA68263\n" +
                             "  InstallerUrl: https://github.com/ip7z/7zip/releases/download/26.05/7z2605-x64.msi\n";
         var m = InstallerVerifier.ParseManifest(yaml);
+        Assert.Equal("7zip.7zip", m.PackageId);
         Assert.Equal("26.05", m.Version);
         Assert.Equal(H256, m.Sha256);
         Assert.Equal("https://github.com/ip7z/7zip/releases/download/26.05/7z2605-x64.msi", m.InstallerUrl);
@@ -130,9 +132,9 @@ public class InstallerVerifierTests
     [Fact]
     public void ManifestCheckDetectsMismatch()
     {
-        Assert.Equal(CheckStatus.Ok, InstallerVerifier.ManifestCheck(new("1", "", H256.ToUpperInvariant()), Digests).Status);
-        Assert.Equal(CheckStatus.Fail, InstallerVerifier.ManifestCheck(new("1", "", new string('0', 64)), Digests).Status);
-        Assert.Equal(CheckStatus.Warn, InstallerVerifier.ManifestCheck(new("1", "", ""), Digests).Status);
+        Assert.Equal(CheckStatus.Ok, InstallerVerifier.ManifestCheck(new("7zip.7zip", "1", "", H256.ToUpperInvariant()), Digests).Status);
+        Assert.Equal(CheckStatus.Fail, InstallerVerifier.ManifestCheck(new("7zip.7zip", "1", "", new string('0', 64)), Digests).Status);
+        Assert.Equal(CheckStatus.Fail, InstallerVerifier.ManifestCheck(new("7zip.7zip", "1", "", ""), Digests).Status);
     }
 
     [Fact]
@@ -170,6 +172,77 @@ public class InstallerVerifierTests
         var signed = Authenticode.Verify(Environment.ProcessPath!);
         Assert.NotEqual(SignatureState.Invalid, signed.State);
         Assert.Contains("Microsoft", signed.Signer);
+    }
+
+    [Fact]
+    public async Task StoreUpdatesAreClearlyMarkedAndNeverPassedAsScanned()
+    {
+        var result = await InstallerVerifier.VerifyAsync("store-app", "msstore");
+        Assert.True(result.Completed);
+        Assert.True(result.StoreManaged);
+        Assert.False(result.Passed);
+        Assert.False(result.PassedWithoutScan);
+        Assert.Contains(result.Checks, check => check.Status == CheckStatus.Warn);
+    }
+
+    [Fact]
+    public void VerifiedInstallerBindsPackageVersionAndManifestDigest()
+    {
+        const string yaml = """
+            PackageIdentifier: example.package
+            PackageVersion: 1.2.3
+            Installers:
+              - InstallerUrl: https://example.org/setup.exe
+                InstallerSha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+            """;
+        var directory = Path.Combine(Path.GetTempPath(), "ba-verified-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "manifest.yaml");
+        File.WriteAllText(path, yaml);
+        var manifestHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+        var installer = new VerifiedInstaller(directory, path, "example.package", "1.2.3",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", manifestHash);
+        try
+        {
+            installer.Validate();
+            File.AppendAllText(path, "# changed\n");
+            Assert.Throws<WingetException>(installer.Validate);
+            Assert.Equal(["upgrade", "--manifest", path, "--silent", "--accept-package-agreements",
+                          "--accept-source-agreements", "--disable-interactivity"],
+                WingetClient.VerifiedUpgradeArguments(path));
+            Assert.Equal(["install", "--manifest", path, "--force", "--silent", "--accept-package-agreements",
+                          "--accept-source-agreements", "--disable-interactivity"],
+                WingetClient.VerifiedInstallArguments(path, allowDowngrade: true));
+            Assert.Contains("--skip-dependencies",
+                WingetClient.DownloadArguments("example.package", directory, "winget", "1.2.3"));
+        }
+        finally { installer.Dispose(); }
+        Assert.False(Directory.Exists(directory));
+    }
+
+    [Fact]
+    public void VerifiedInstallerCleanupCanBeRetriedAfterFailure()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "ba-verified-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "manifest.yaml");
+        File.WriteAllText(path, "manifest");
+        var installer = new VerifiedInstaller(directory, path, "example.package", "1.0",
+            new string('0', 64), new string('0', 64));
+        using (var lockedFile = new FileStream(Path.Combine(directory, "locked.tmp"), FileMode.Create,
+                   FileAccess.ReadWrite, FileShare.None))
+            Assert.ThrowsAny<IOException>(installer.Dispose);
+        installer.Dispose();
+        Assert.False(Directory.Exists(directory));
+    }
+
+    [Fact]
+    public void WingetRequiresValidMicrosoftAuthenticodeSignature()
+    {
+        Assert.True(WingetClient.IsTrustedWingetSignature(new(SignatureState.Valid, 0, "Microsoft Corporation")));
+        Assert.False(WingetClient.IsTrustedWingetSignature(new(SignatureState.Valid, 0, "Unknown Publisher")));
+        Assert.False(WingetClient.IsTrustedWingetSignature(new(SignatureState.Unknown, 0, "Microsoft Corporation")));
+        Assert.False(WingetClient.IsTrustedWingetSignature(new(SignatureState.Invalid, 0, "Microsoft Corporation")));
     }
 }
 

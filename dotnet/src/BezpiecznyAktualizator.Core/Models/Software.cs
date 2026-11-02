@@ -93,7 +93,9 @@ public sealed partial class Software
             if (IsUrgent)
             {
                 var v = Vulnerabilities!;
-                parts.Add(L.F("PILNE: {0} CVE (CVSS {1:0.0})", v.Items.Count, v.MaxScore) + (v.Exploited ? " KEV" : ""));
+                if (v.Items.Count > 0)
+                    parts.Add(L.F("PILNE: {0} CVE (CVSS {1:0.0})", v.Items.Count, v.MaxScore) + (v.Exploited ? " KEV" : ""));
+                if (v.OsvItems.Count > 0) parts.Add(L.F("OSV: {0} podatności", v.OsvItems.Count));
             }
             if (Lifecycle?.State == LifecycleState.Eol) parts.Add(L.T("EOL"));
             else if (Lifecycle?.State == LifecycleState.Abandoned) parts.Add(L.T("porzucony"));

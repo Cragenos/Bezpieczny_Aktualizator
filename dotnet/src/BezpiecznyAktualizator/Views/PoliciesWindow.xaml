@@ -89,6 +89,10 @@
                         </DataGrid>
                         <TextBlock Style="{StaticResource Secondary}" TextWrapping="Wrap" Margin="0,8,0,0"
                                    Text="{l:Tr 'Wersja: puste pole - program zostaje na zainstalowanej wersji; wzorzec z gwiazdką (np. 24.*) - dozwolone są tylko aktualizacje w tej gałęzi; konkretny numer - dozwolona jest tylko ta wersja. Do dnia (RRRR-MM-DD, opcjonalnie) - po tej dacie wstrzymanie przestaje obowiązywać.'}" />
+                        <TextBlock Style="{StaticResource Secondary}" TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="{l:Tr 'Microsoft Store nie gwarantuje instalacji wskazanej wersji. Aktywne wstrzymanie blokuje aktualizację.'}" />
+                        <TextBlock Style="{StaticResource Secondary}" TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="{l:Tr 'Automatyczne aktualizacje w Microsoft Store nie podlegają zasadom tego programu.'}" />
                     </StackPanel>
                 </Border>
 

@@ -3,6 +3,9 @@
 Repozytorium zawiera rozwijaną wersję [C#/WPF (.NET 10)](dotnet/README.md) oraz wcześniejszą
 wersję Python opisaną poniżej.
 
+Aktualna wersja kodu C#/WPF to **2.1.2**. Pełny opis zmian względem 2.1.0 znajduje się w
+[historii zmian](CHANGELOG.md), a wymagania i instrukcje w [dokumentacji wersji .NET](dotnet/README.md).
+
 Aplikacja okienkowa dla Windows, która:
 
 1. **Wyszukuje zainstalowane oprogramowanie**: odczytuje klucze `Uninstall` z rejestru (HKLM 64/32-bit, HKCU) i dodaje pakiety rozpoznane przez winget (np. aplikacje MSIX/Store).

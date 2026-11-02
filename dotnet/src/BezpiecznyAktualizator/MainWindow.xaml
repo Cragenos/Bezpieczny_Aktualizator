@@ -4,6 +4,7 @@
         xmlns:l="clr-namespace:BezpiecznyAktualizator.Services"
         xmlns:views="clr-namespace:BezpiecznyAktualizator.Views"
         Title="{l:Tr 'Bezpieczny Aktualizator 2.1 – oprogramowanie i sterowniki z bezpiecznych źródeł'}"
+        Icon="Assets/UpdaterAppIcon.ico"
         Width="1380" Height="840" MinWidth="980" MinHeight="560"
         Closing="Window_Closing" StateChanged="Window_StateChanged"
         WindowStartupLocation="CenterScreen" ContentRendered="OnContentRendered">
@@ -21,9 +22,8 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal">
-                <Border Width="40" Height="40" CornerRadius="10" Background="{DynamicResource AccentFillColorDefaultBrush}">
-                    <TextBlock Style="{StaticResource Icon}" Text="&#xEA18;" FontSize="22" HorizontalAlignment="Center"
-                               Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}" />
+                <Border Width="40" Height="40" CornerRadius="10">
+                    <Image Source="Assets/UpdaterAppIcon.png" Stretch="Uniform" />
                 </Border>
                 <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                     <TextBlock Text="Bezpieczny Aktualizator" FontSize="20" FontWeight="SemiBold" />
@@ -42,11 +42,16 @@
                                       IsCheckable="True" Click="AutoOption_Click" />
                             <MenuItem x:Name="AutoAppUpdates" Header="{l:Tr 'Sprawdzaj aktualizacje programu po uruchomieniu'}"
                                       IsCheckable="True" Click="AutoAppUpdates_Click" />
+                            <MenuItem x:Name="PreviewAppUpdates" Header="{l:Tr 'Uwzględniaj wydania testowe programu (beta)'}"
+                                      IsCheckable="True" Click="PreviewAppUpdates_Click" />
                             <Separator />
                             <MenuItem Header="{l:Tr 'Sprawdź teraz'}" Click="CheckNow_Click" />
                             <Separator />
                             <MenuItem Header="{l:Tr 'Harmonogram cichych aktualizacji...'}" Click="Schedule_Click" />
                             <MenuItem Header="{l:Tr 'Zasady aktualizacji...'}" Click="Policies_Click" />
+                            <MenuItem Header="{l:Tr 'Historia ostrzeżeń i błędów...'}" Click="LogHistory_Click" />
+                            <MenuItem Header="{l:Tr 'Eksportuj pakiet diagnostyczny...'}" Click="ExportDiagnostics_Click" />
+                            <MenuItem Header="{l:Tr 'Powiadomienia...'}" Click="Notifications_Click" />
                         </ContextMenu>
                     </Button.ContextMenu>
                 </Button>
@@ -108,6 +113,24 @@
                     </StackPanel>
                 </TabItem.Header>
                 <views:DriversView x:Name="Drivers" />
+            </TabItem>
+            <TabItem AutomationProperties.Name="{l:Tr 'Windows Update'}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE895;" Margin="0,0,8,0" />
+                        <TextBlock Text="{l:Tr 'Windows Update'}" />
+                    </StackPanel>
+                </TabItem.Header>
+                <views:WindowsUpdateView x:Name="WindowsUpdates" />
+            </TabItem>
+            <TabItem AutomationProperties.Name="{l:Tr 'Microsoft Store'}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE719;" Margin="0,0,8,0" />
+                        <TextBlock Text="{l:Tr 'Microsoft Store'}" />
+                    </StackPanel>
+                </TabItem.Header>
+                <views:MicrosoftStoreView x:Name="Store" />
             </TabItem>
         </TabControl>
     </Grid>

@@ -46,6 +46,27 @@
                             <ComboBox x:Name="IntervalBox" Grid.Row="1" Grid.Column="1" Width="220" HorizontalAlignment="Left"
                                       AutomationProperties.Name="{l:Tr 'Nie częściej niż co (godz.):'}" />
                         </Grid>
+                        <WrapPanel Margin="0,12,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="{l:Tr 'Okno serwisowe od:'}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ComboBox x:Name="WindowStartBox" Width="88" Margin="0,0,16,0"
+                                      AutomationProperties.Name="{l:Tr 'Okno serwisowe od:'}" />
+                            <TextBlock Text="{l:Tr 'do:'}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ComboBox x:Name="WindowEndBox" Width="88"
+                                      AutomationProperties.Name="{l:Tr 'Okno serwisowe do:'}" />
+                            <TextBlock Text="{l:Tr '00:00–00:00 oznacza cały dzień.'}" Style="{StaticResource Secondary}"
+                                       VerticalAlignment="Center" Margin="12,0,0,0" />
+                        </WrapPanel>
+                        <CheckBox x:Name="SkipBatteryBox" Margin="0,10,0,0"
+                                  Content="{l:Tr 'Pomijaj instalacje, gdy komputer działa na baterii'}" />
+                        <CheckBox x:Name="SkipMeteredBox" Margin="0,4,0,0"
+                                  Content="{l:Tr 'Pomijaj instalacje w sieci taryfowej lub o nieznanym koszcie'}" />
+                        <WrapPanel Margin="0,10,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="{l:Tr 'Ponów nieudaną instalację maksymalnie:'}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ComboBox x:Name="RetriesBox" Width="90"
+                                      AutomationProperties.Name="{l:Tr 'Maksymalna liczba ponowień instalacji'}" />
+                            <TextBlock Text="{l:Tr 'po 30, 60 i 90 sekundach (maks.)'}" Style="{StaticResource Secondary}"
+                                       VerticalAlignment="Center" Margin="8,0,0,0" />
+                        </WrapPanel>
                         <CheckBox x:Name="NoScanBox" Margin="0,8,0,0"
                                   Content="{l:Tr 'Instaluj także wtedy, gdy Microsoft Defender jest niedostępny (bez skanowania antywirusowego)'}"
                                   ToolTip="{l:Tr 'Domyślnie pakiety, których instalator nie mógł zostać przeskanowany programem Microsoft Defender (np. gdy działa inny antywirus), są pomijane.'}" />
@@ -55,6 +76,12 @@
                                   Content="{l:Tr 'Sprawdzaj sterowniki w Windows Update'}" />
                         <CheckBox x:Name="DriversInstallBox" Margin="24,2,0,0"
                                   Content="{l:Tr 'Instaluj sterowniki automatycznie (z punktem przywracania systemu)'}" />
+
+                        <TextBlock Text="{l:Tr 'Windows Update'}" FontWeight="SemiBold" Margin="0,14,0,6" />
+                        <CheckBox x:Name="WindowsUpdatesCheckBox" Click="Mode_Click"
+                                  Content="{l:Tr 'Sprawdzaj aktualizacje Windows w harmonogramie'}" />
+                        <CheckBox x:Name="WindowsUpdatesInstallBox" Margin="24,2,0,0"
+                                  Content="{l:Tr 'Instaluj automatycznie tylko obowiązkowe aktualizacje z wcześniej zaakceptowaną licencją'}" />
 
                         <TextBlock Text="{l:Tr 'Zasady aktualizacji'}" FontWeight="SemiBold" Margin="0,14,0,6" />
                         <DockPanel>

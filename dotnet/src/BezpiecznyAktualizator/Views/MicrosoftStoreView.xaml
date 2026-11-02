@@ -1,0 +1,54 @@
+<UserControl x:Class="BezpiecznyAktualizator.Views.MicrosoftStoreView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="clr-namespace:BezpiecznyAktualizator.Services"
+             IsVisibleChanged="View_IsVisibleChanged">
+    <DockPanel Margin="4,12,4,4">
+        <WrapPanel x:Name="Toolbar" DockPanel.Dock="Top" Margin="0,0,0,4">
+            <Button Style="{StaticResource ToolButton}" Tag="&#xE895;" Content="{l:Tr 'Sprawdź aktualizacje'}" Click="Search_Click" />
+            <Button Style="{StaticResource AccentToolButton}" Tag="&#xE896;" Content="{l:Tr 'Aktualizuj zaznaczone'}" Click="Upgrade_Click" />
+            <Button Style="{StaticResource ToolButton}" Tag="&#xE719;" Content="{l:Tr 'Otwórz aktualizacje w Microsoft Store'}" Click="OpenStore_Click" />
+            <Button Style="{StaticResource ToolButton}" Tag="&#xE8D7;" Content="{l:Tr 'Zasady'}" Click="Policies_Click" />
+        </WrapPanel>
+        <TextBlock DockPanel.Dock="Top" Style="{StaticResource Secondary}" Margin="2,0,2,8" TextWrapping="Wrap"
+                   Text="{l:Tr 'WinGet może nie wykryć wszystkich aktualizacji Store. Pozostałe sprawdzisz w Microsoft Store.'}" />
+        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8" LastChildFill="False">
+            <TextBlock Style="{StaticResource Icon}" Text="&#xE71C;" Margin="0,0,8,0" />
+            <TextBlock Text="{l:Tr 'Filtr:'}" VerticalAlignment="Center" />
+            <TextBox x:Name="FilterBox" Width="280" Margin="8,0,16,0" TextChanged="Filter_Changed"
+                     AutomationProperties.Name="{l:Tr 'Filtr:'}" />
+            <TextBlock x:Name="CountLabel" DockPanel.Dock="Right" Style="{StaticResource Secondary}" />
+        </DockPanel>
+        <DockPanel DockPanel.Dock="Bottom" Margin="2,8,2,0">
+            <ProgressBar x:Name="Progress" DockPanel.Dock="Right" Width="220" Visibility="Hidden" VerticalAlignment="Center" />
+            <TextBlock x:Name="StatusText" Style="{StaticResource Secondary}" Text="{l:Tr 'Gotowy.'}"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </DockPanel>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="3*" MinHeight="120" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="2*" MinHeight="80" />
+            </Grid.RowDefinitions>
+            <DataGrid x:Name="Table" Style="{StaticResource Grid}" SelectionChanged="Table_SelectionChanged">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="{l:Tr 'Nazwa'}" Binding="{Binding Name}" Width="2*" MinWidth="200" />
+                    <DataGridTextColumn Header="{l:Tr 'Wersja'}" Binding="{Binding Version}" Width="140" />
+                    <DataGridTextColumn Header="{l:Tr 'Dostępna'}" Binding="{Binding AvailableDisplay}" Width="140" />
+                    <DataGridTextColumn Header="{l:Tr 'Status'}" Binding="{Binding Status}" Width="160" />
+                    <DataGridTextColumn Header="{l:Tr 'Zasada'}" Binding="{Binding PolicyDisplay}" Width="160" />
+                    <DataGridTextColumn Header="{l:Tr 'Identyfikator pakietu'}" Binding="{Binding WingetId}" Width="*" MinWidth="180" />
+                </DataGrid.Columns>
+            </DataGrid>
+            <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="Transparent" />
+            <TabControl x:Name="BottomTabs" Grid.Row="2">
+                <TabItem Header="{l:Tr 'Szczegóły'}">
+                    <TextBox x:Name="Details" Style="{StaticResource LogBox}" />
+                </TabItem>
+                <TabItem Header="{l:Tr 'Dziennik'}">
+                    <TextBox x:Name="LogBox" Style="{StaticResource LogBox}" />
+                </TabItem>
+            </TabControl>
+        </Grid>
+    </DockPanel>
+</UserControl>

@@ -196,6 +196,9 @@ try {
     New-Item -ItemType Directory $InstallDir -Force | Out-Null
     Copy-Item (Join-Path $Pkg 'app\*') $InstallDir -Recurse -Force
     Copy-Item (Join-Path $Pkg 'cert\BezpiecznyAktualizator.cer') $InstallDir -Force
+    foreach ($notice in 'LICENSE', 'THIRD-PARTY-NOTICES.txt', 'DOTNET-LICENSE.txt', 'DOTNET-THIRD-PARTY-NOTICES.txt') {
+        Copy-Item (Join-Path $Pkg $notice) $InstallDir -Force
+    }
     $exe = Join-Path $InstallDir $ExeName
     Write-Ok "Podpis zainstalowanego pliku: $(Test-OwnSignature $exe $cert)"
 

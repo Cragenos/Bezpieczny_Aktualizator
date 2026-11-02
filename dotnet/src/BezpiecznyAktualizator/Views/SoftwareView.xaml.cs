@@ -11,6 +11,7 @@ using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Risk;
+using BezpiecznyAktualizator.Core.Scheduling;
 using BezpiecznyAktualizator.Core.Security;
 using BezpiecznyAktualizator.Core.Winget;
 using BezpiecznyAktualizator.Services;
@@ -30,7 +31,7 @@ public partial class SoftwareView : UserControl
     public SoftwareView()
     {
         InitializeComponent();
-        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.Scan);
+        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.Scan, CanStartWinget);
         _view = CreateView();
         L.LanguageChanged += RefreshTable;
     }
@@ -175,9 +176,17 @@ public partial class SoftwareView : UserControl
         }
         var rule = new string('=', 70);
         lines.AddRange(RiskDetails(s, rule));
-        if (UpdateHistory.LastRollbackable(UpdateHistory.Load(), s.WingetId) is { } last)
-            lines.AddRange(["", L.F("Poprzednia wersja: {0} (zaktualizowano {1:yyyy-MM-dd HH:mm}) - można ją przywrócić przyciskiem „Historia i wycofanie”.",
-                                    last.FromVersion, last.Time.ToLocalTime())]);
+        try
+        {
+            if (UpdateHistory.LastRollbackable(UpdateHistory.Load(), s.WingetId) is { } last)
+                lines.AddRange(["", L.F("Poprzednia wersja: {0} (zaktualizowano {1:yyyy-MM-dd HH:mm}) - można ją przywrócić przyciskiem „Historia i wycofanie”.",
+                                        last.FromVersion, last.Time.ToLocalTime())]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            Syslog.Warning(LogEvent.Rollback, L.F("Nie udało się odczytać historii aktualizacji: {0}", ex.Message));
+            lines.AddRange(["", L.T("Nie udało się odczytać historii aktualizacji."), ex.Message]);
+        }
         if (s.SecurityReport.Length > 0) lines.AddRange(["", rule, L.T("OCENA ŹRÓDŁA AKTUALIZACJI"), rule, s.SecurityReport]);
         else lines.AddRange(["", L.T("Kliknij dwukrotnie lub użyj „Oceń źródło”, aby zweryfikować źródło aktualizacji.")]);
         Details.Text = string.Join(Environment.NewLine, lines);
@@ -189,7 +198,7 @@ public partial class SoftwareView : UserControl
         if (s.Vulnerabilities is { } v)
         {
             lines.AddRange(["", rule, L.T("ZNANE PODATNOŚCI (NVD)"), rule]);
-            if (v.Error is { } error) lines.Add(error.ToString());
+            if (v.Error is { } error) lines.Add(L.F("NVD: {0}", error));
             else
             {
                 var origin = v.CpeOrigin switch
@@ -212,13 +221,32 @@ public partial class SoftwareView : UserControl
                     {
                         var desc = c.Description.Length > 180 ? c.Description[..180] + "…" : c.Description;
                         lines.Add($"  {c.Id}  CVSS {c.Score:0.0} {c.Severity}{(c.Exploited ? "  [KEV]" : "")}");
+                        if (c.EpssScore is { } epss)
+                            lines.Add(L.F("      EPSS: {0:P1} (percentyl {1:P1})", epss, c.EpssPercentile ?? 0));
                         if (desc.Length > 0) lines.Add("      " + desc);
                         lines.Add("      " + c.Url);
                     }
                     if (v.Items.Count > shown) lines.Add(L.F("... oraz {0} kolejnych.", v.Items.Count - shown));
                 }
+                if (v.EpssError is { } epssError)
+                    lines.Add(L.F("Nie udało się pobrać ocen EPSS: {0}", epssError));
                 lines.Add(L.T("Dopasowanie programu do CPE jest automatyczne - przed decyzją sprawdź szczegóły w NVD."));
             }
+        }
+        if (s.Vulnerabilities is { OsvRepository.Length: > 0 } osv)
+        {
+            lines.AddRange(["", rule, L.T("DODATKOWE PODATNOŚCI (OSV)"), rule]);
+            lines.Add(L.F("Repozytorium: {0}; pewność dopasowania: {1}.",
+                osv.OsvRepository, osv.OsvConfidence == "medium" ? L.T("umiarkowana — adres GitHub z metadanych pakietu") : osv.OsvConfidence));
+            if (osv.OsvError is { } osvError) lines.Add(osvError.ToString());
+            else if (osv.OsvItems.Count == 0) lines.Add(L.T("Nie znaleziono podatności dla dokładnego repozytorium i wersji."));
+            foreach (var item in osv.OsvItems.Take(15))
+            {
+                lines.Add($"  {item.Id}: {item.Summary}");
+                if (item.Aliases.Count > 0) lines.Add("      " + L.F("Alias CVE: {0}", string.Join(", ", item.Aliases)));
+                lines.Add("      " + item.Url);
+            }
+            if (osv.OsvItems.Count > 15) lines.Add(L.F("... oraz {0} kolejnych.", osv.OsvItems.Count - 15));
         }
         if (s.Lifecycle is { } life)
         {
@@ -286,6 +314,8 @@ public partial class SoftwareView : UserControl
     }
 
     public bool IsBusy => _runner.IsBusy;
+
+    private bool CanStartWinget() => Window.GetWindow(this) is not MainWindow main || main.CanStartWinget(this);
 
     /// <summary>Pokazuje tylko programy z dostępną aktualizacją.</summary>
     public void ShowOnlyUpdates() => OnlyUpdates.IsChecked = true;
@@ -372,7 +402,14 @@ public partial class SoftwareView : UserControl
                 try
                 {
                     Func<Task<IReadOnlyDictionary<string, string>?>>? show = wingetAvailable && !string.IsNullOrEmpty(s.WingetId)
-                        ? async () => await WingetClient.ShowAsync(s.WingetId!, s.WingetSource) : null;
+                        ? async () =>
+                        {
+                            var info = await WingetClient.ShowAsync(s.WingetId!, s.WingetSource);
+                            if (info is not null)
+                                s.Homepage = info.GetValueOrDefault("Homepage") ?? info.GetValueOrDefault("Publisher Url") ?? "";
+                            return info;
+                        }
+                        : null;
                     (life, product) = await LifecycleClient.CheckAsync(s, show);
                 }
                 catch (Exception ex) when (ex is RiskException or WingetException)
@@ -386,16 +423,43 @@ public partial class SoftwareView : UserControl
                 }
                 catch (RiskException ex)
                 {
-                    report = new VulnerabilityReport { Error = ex.Message };
+                    report = new VulnerabilityReport { Version = NvdClient.ProductVersion(s.Name, s.Version), Error = ex.Message };
                     _runner.Log(L.F("Nie udało się sprawdzić podatności {0}: {1}", s.Name, ex.Message), SyslogSeverity.Warning, LogEvent.Vulnerability);
                 }
+                if (OsvClient.GitHubRepository(s.Homepage) is { } repository && report.Version.Length > 0)
+                {
+                    var parts = repository.Split('/');
+                    report.OsvRepository = repository;
+                    report.OsvConfidence = "medium";
+                    try
+                    {
+                        report.OsvItems = (await OsvClient.CheckGitHubRepositoryAsync(parts[0], parts[1], report.Version)).ToList();
+                    }
+                    catch (Exception ex) when (ex is RiskException or ArgumentException)
+                    {
+                        report.OsvError = ex.Message;
+                        _runner.Log(L.F("Nie udało się sprawdzić repozytorium {0} w OSV: {1}", repository, ex.Message),
+                            SyslogSeverity.Warning, LogEvent.Vulnerability);
+                    }
+                }
+                if (report.EpssError is { } epssError)
+                    _runner.Log(L.F("Nie udało się pobrać ocen EPSS: {0}", epssError), SyslogSeverity.Warning, LogEvent.Vulnerability);
                 _risk[groups[i].Key] = (report, life);
                 foreach (var item in groups[i]) (item.Vulnerabilities, item.Lifecycle) = (report, life);
 
-                if (report.IsUrgent)
-                    _runner.Log(L.F("PILNE: {0} {1} - znane podatności: {2}, najwyższa ocena CVSS {3:0.0}{4} ({5}).", s.Name, s.Version,
-                        report.Items.Count, report.MaxScore, report.Exploited ? ", " + L.T("aktywnie wykorzystywane (CISA KEV)") : "",
-                        string.Join(", ", report.Items.Take(5).Select(c => c.Id))), SyslogSeverity.Warning, LogEvent.Vulnerability);
+                if (report.IsUrgent && report.Items.Count > 0)
+                    _runner.Log(L.F("PILNE: {0} {1} - NVD: {2}, OSV: {3}, najwyższa ocena CVSS {4:0.0}{5} ({6}).", s.Name, s.Version,
+                        report.Items.Count, report.OsvItems.Count, report.MaxScore,
+                        report.Exploited ? ", " + L.T("aktywnie wykorzystywane (CISA KEV)") : "",
+                        string.Join(", ", report.Items.Concat(report.OsvItems.SelectMany(item =>
+                            item.Aliases.Where(alias => alias.StartsWith("CVE-", StringComparison.OrdinalIgnoreCase))
+                                .Select(alias => new CveItem(alias, 0, "", "", null, false))))
+                            .Select(item => item.Id).Distinct(StringComparer.OrdinalIgnoreCase).Take(5))),
+                        SyslogSeverity.Warning, LogEvent.Vulnerability);
+                else if (report.IsUrgent)
+                    _runner.Log(L.F("PILNE: {0} {1} - OSV: {2} znalezionych podatności dla {3}.",
+                        s.Name, s.Version, report.OsvItems.Count, report.OsvRepository),
+                        SyslogSeverity.Warning, LogEvent.Vulnerability);
                 if (life?.State is LifecycleState.Eol or LifecycleState.Abandoned)
                     _runner.Log($"{s.Name} {s.Version}: {life.Reason}", SyslogSeverity.Warning, LogEvent.Vulnerability);
                 RefreshTable();
@@ -407,7 +471,7 @@ public partial class SoftwareView : UserControl
         var abandoned = checkedItems.Count(s => s.Lifecycle?.State == LifecycleState.Abandoned);
         var unknown = checkedItems.Count(s => s.Vulnerabilities is { Checked: false });
         var summary = L.F("Sprawdzono programów: {0}", checkedItems.Count) + "\n" +
-                      L.F("Pilne - ze znanymi podatnościami (CVE): {0}", urgent) + "\n" +
+                      L.F("Pilne - ze znalezionymi podatnościami (NVD/OSV): {0}", urgent) + "\n" +
                       L.F("Nieobsługiwane (EOL): {0}", eol) + "\n" +
                       L.F("Prawdopodobnie porzucone: {0}", abandoned) + "\n" +
                       L.F("Bez danych w NVD (nie sprawdzono podatności): {0}", unknown);
@@ -499,7 +563,15 @@ public partial class SoftwareView : UserControl
     private async void History_Click(object sender, RoutedEventArgs e)
     {
         var current = Table.SelectedItem as Software;
-        var dialog = new HistoryWindow(UpdateHistory.Load(), current?.WingetId) { Owner = Window.GetWindow(this) };
+        List<UpdateRecord> records;
+        try { records = UpdateHistory.Load(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or TimeoutException)
+        {
+            Syslog.Warning(LogEvent.Rollback, L.F("Nie udało się odczytać historii aktualizacji: {0}", ex.Message));
+            Ui.Error(this, L.T("Historia aktualizacji"), L.F("Nie udało się bezpiecznie odczytać historii: {0}", ex.Message));
+            return;
+        }
+        var dialog = new HistoryWindow(records, current?.WingetId) { Owner = Window.GetWindow(this) };
         if (dialog.ShowDialog() != true || dialog.SelectedRecord is not { } record) return;
         await RollbackAsync(record);
     }
@@ -531,18 +603,29 @@ public partial class SoftwareView : UserControl
         BottomTabs.SelectedIndex = 1;
 
         var verify = VerifyChecksums.IsChecked == true;
+        VerifiedInstaller? verifiedInstaller = null;
         var code = -1;
         var blocked = false;
-        ok = await _runner.RunAsync(LogEvent.Rollback, L.F("Przywracanie {0} {1}...", record.Name, version), async () =>
+        try
         {
-            if (verify && await VerifyInstallerAsync(record.Name, record.WingetId, record.Source, version) is null)
+            ok = await _runner.RunAsync(LogEvent.Rollback, L.F("Przywracanie {0} {1}...", record.Name, version), async () =>
             {
-                blocked = true;
-                return;
-            }
-            _runner.Log(L.F("Przywracanie {0} ({1}) do wersji {2}...", record.Name, record.WingetId, version), SyslogSeverity.Notice, LogEvent.Rollback);
-            code = await WingetClient.InstallVersionAsync(record.WingetId, version, line => UiLog("  " + line), record.Source);
-        }, typeof(WingetException));
+                if (verify)
+                {
+                    verifiedInstaller = await VerifyInstallerAsync(record.Name, record.WingetId, record.Source, version);
+                    if (verifiedInstaller is null)
+                    {
+                        blocked = true;
+                        return;
+                    }
+                }
+                _runner.Log(L.F("Przywracanie {0} ({1}) do wersji {2}...", record.Name, record.WingetId, version), SyslogSeverity.Notice, LogEvent.Rollback);
+                code = verifiedInstaller is null
+                    ? await WingetClient.InstallVersionAsync(record.WingetId, version, line => UiLog("  " + line), record.Source)
+                    : await WingetClient.InstallVerifiedAsync(verifiedInstaller, line => UiLog("  " + line), allowDowngrade: true);
+            }, typeof(WingetException));
+        }
+        finally { verifiedInstaller?.Dispose(); }
         if (!ok || blocked) return;
         if (code != 0)
         {
@@ -551,12 +634,20 @@ public partial class SoftwareView : UserControl
                      L.T("Szczegóły w zakładce „Dziennik”."));
             return;
         }
-        UpdateHistory.MarkRolledBack(record.Id);
-        UpdateHistory.Add(new UpdateRecord
+        try
         {
-            Kind = UpdateKind.Rollback, Name = record.Name, WingetId = record.WingetId, Source = record.Source,
-            FromVersion = record.ToVersion, ToVersion = version,
-        });
+            UpdateHistory.RecordRollback(record.Id, new UpdateRecord
+            {
+                Kind = UpdateKind.Rollback, Name = record.Name, WingetId = record.WingetId, Source = record.Source,
+                FromVersion = record.ToVersion, ToVersion = version,
+            });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or TimeoutException)
+        {
+            _runner.Log(L.F("Wycofano {0}, ale nie udało się zapisać historii aktualizacji: {1}", record.Name, ex.Message),
+                SyslogSeverity.Warning, LogEvent.Rollback);
+            Ui.Warn(this, L.T("Historia aktualizacji"), L.F("Wycofano {0}, ale nie udało się zapisać historii: {1}", record.Name, ex.Message));
+        }
         _runner.Log(L.F("Przywrócono {0} do wersji {1}.", record.Name, version), SyslogSeverity.Notice, LogEvent.Rollback);
 
         var policies = Settings.Policies;
@@ -594,6 +685,12 @@ public partial class SoftwareView : UserControl
             Ui.Info(this, L.T("Brak aktualizacji"),
                     L.T("Zaznaczone programy nie mają aktualizacji dostępnej przez zaufane repozytorium.") + "\n" +
                     L.T("Dla pozostałych użyj „Strona producenta”."));
+            return;
+        }
+        if (targets.Any(SilentUpdatePolicy.IsStoreManaged))
+        {
+            Ui.Warn(this, L.T("Microsoft Store"),
+                L.T("Aktualizacje Microsoft Store obsługuj w dedykowanej zakładce, gdzie wymagane jest osobne potwierdzenie. Aktualizacja z tego widoku została wstrzymana."));
             return;
         }
 
@@ -660,25 +757,34 @@ public partial class SoftwareView : UserControl
         {
             foreach (var s in targets)
             {
-                var version = "";
+                VerifiedInstaller? verifiedInstaller = null;
+                var version = s.AvailableVersion;
                 var sha256 = "";
                 if (verifyChecksums)
                 {
-                    if (await VerifyInstallerAsync(s.Name, s.WingetId!, s.WingetSource) is not { } verification)
+                    verifiedInstaller = await VerifyInstallerAsync(s.Name, s.WingetId!, s.WingetSource);
+                    if (verifiedInstaller is null)
                     {
                         blocked.Add(s);
                         continue;
                     }
-                    (version, sha256) = verification;
+                    version = verifiedInstaller.Version;
+                    sha256 = verifiedInstaller.Sha256;
                 }
-                _runner.Log(L.F("Aktualizacja {0} ({1})...", s.Name, s.WingetId), SyslogSeverity.Notice);
-                var code = await WingetClient.UpgradeAsync(s.WingetId!, line => UiLog("  " + line), s.WingetSource, version);
-                results.Add((s, code));
-                if (code == 0)
+                try
                 {
-                    _runner.Log(L.F("Zaktualizowano {0} ({1}).", s.Name, s.WingetId), SyslogSeverity.Notice);
-                    RecordUpgrade(s, version, sha256, scheduled: false);
+                    _runner.Log(L.F("Aktualizacja {0} ({1})...", s.Name, s.WingetId), SyslogSeverity.Notice);
+                    var code = verifiedInstaller is null
+                        ? await WingetClient.UpgradeAsync(s.WingetId!, line => UiLog("  " + line), s.WingetSource, version)
+                        : await WingetClient.UpgradeVerifiedAsync(verifiedInstaller, line => UiLog("  " + line));
+                    results.Add((s, code));
+                    if (code == 0)
+                    {
+                        _runner.Log(L.F("Zaktualizowano {0} ({1}).", s.Name, s.WingetId), SyslogSeverity.Notice);
+                        RecordUpgrade(s, version, sha256, scheduled: false);
+                    }
                 }
+                finally { verifiedInstaller?.Dispose(); }
             }
         }, typeof(WingetException));
         if (!ok) return;
@@ -706,7 +812,7 @@ public partial class SoftwareView : UserControl
                 Sha256 = sha256, Scheduled = scheduled,
             });
         }
-        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or InvalidDataException or TimeoutException)
         {
             Syslog.Warning(LogEvent.Rollback, L.F("Nie udało się zapisać historii aktualizacji: {0}", ex.Message));
         }
@@ -716,7 +822,7 @@ public partial class SoftwareView : UserControl
     /// Weryfikuje instalator przed instalacją. Zwraca wersję do zainstalowania ("" = bez przypinania) i SHA256
     /// albo null, gdy instalacja ma zostać wstrzymana.
     /// </summary>
-    private async Task<(string Version, string Sha256)?> VerifyInstallerAsync(string name, string wingetId, string source, string version = "")
+    private async Task<VerifiedInstaller?> VerifyInstallerAsync(string name, string wingetId, string source, string version = "")
     {
         _runner.Log(L.F("Weryfikacja plików kontrolnych: {0} ({1})...", name, wingetId), SyslogSeverity.Informational, LogEvent.Verify);
         var result = await InstallerVerifier.VerifyAsync(wingetId, source,
@@ -735,7 +841,14 @@ public partial class SoftwareView : UserControl
         }
         if (result.Blocked)
         {
+            result.VerifiedInstaller?.Dispose();
             _runner.Log(L.F("Instalacja {0} wstrzymana - instalator nie przeszedł weryfikacji.", name), SyslogSeverity.Error, LogEvent.Verify);
+            return null;
+        }
+        if (result.StoreManaged)
+        {
+            _runner.Log(L.F("Pominięto {0} - aktualizacje Microsoft Store wymagają dedykowanej zakładki.", name),
+                SyslogSeverity.Warning, LogEvent.Verify);
             return null;
         }
         if (result.PassedWithoutScan)
@@ -746,23 +859,27 @@ public partial class SoftwareView : UserControl
             _runner.Log(install ? L.F("Użytkownik zezwolił na instalację {0} bez skanowania Microsoft Defender.", name)
                                 : L.F("Użytkownik wstrzymał instalację {0}.", name),
                         install ? SyslogSeverity.Warning : SyslogSeverity.Notice, LogEvent.Verify);
-            if (!install) return null;
+            if (!install)
+            {
+                result.VerifiedInstaller?.Dispose();
+                return null;
+            }
         }
         if (result.Completed)
         {
             if (result.Sha256.Length > 0)
                 _runner.Log(L.F("Instalator zweryfikowany: {0} {1}, SHA256 {2}", name, result.Version, result.Sha256),
                             SyslogSeverity.Notice, LogEvent.Verify);
-            return (result.Version, result.Sha256);
+            return result.VerifiedInstaller;
         }
         var reason = result.Error?.ToString() ?? "";
         _runner.Log(L.F("Nie udało się zweryfikować instalatora {0}: {1}", name, reason), SyslogSeverity.Warning, LogEvent.Verify);
-        var proceed = Ui.Confirm(this, L.T("Weryfikacja plików kontrolnych"),
-            L.F("Nie udało się zweryfikować instalatora {0}:", name) + "\n" + reason + "\n\n" +
-            L.T("winget nadal sprawdzi sumę SHA256 z manifestu, ale instalator nie zostanie przeskanowany programem Microsoft Defender. Kontynuować instalację bez dodatkowej weryfikacji?"), warning: true);
-        _runner.Log(proceed ? L.F("Użytkownik kontynuował instalację {0} bez weryfikacji.", name)
-                            : L.F("Użytkownik wstrzymał instalację {0}.", name), SyslogSeverity.Notice, LogEvent.Verify);
-        return proceed ? ("", "") : null;
+        Ui.Warn(this, L.T("Weryfikacja plików kontrolnych"),
+            L.F("Nie udało się zweryfikować instalatora {0}; aktualizacja została wstrzymana.", name) +
+            "\n\n" + reason + "\n\n" +
+            L.T("Aby pominąć dodatkową weryfikację, wyłącz ją świadomie w ustawieniach i zaakceptuj ostrzeżenie."));
+        result.VerifiedInstaller?.Dispose();
+        return null;
     }
 
     /// <summary>Wyłączenie weryfikacji wyłącza też skanowanie Defender, dlatego wymaga wyraźnego potwierdzenia.</summary>
@@ -909,6 +1026,11 @@ public partial class SoftwareView : UserControl
         ["cve_max_cvss"] = s.Vulnerabilities?.Checked == true && s.Vulnerabilities.Items.Count > 0 ? s.Vulnerabilities.MaxScore : null,
         ["cve_ids"] = s.Vulnerabilities is { Checked: true } v ? string.Join(" ", v.Items.Select(c => c.Id)) : "",
         ["cve_exploited"] = s.Vulnerabilities?.Exploited,
+        ["epss_max_score"] = s.Vulnerabilities?.Items.Where(c => c.EpssScore.HasValue).Select(c => c.EpssScore).DefaultIfEmpty().Max(),
+        ["osv_repository"] = s.Vulnerabilities?.OsvRepository ?? "",
+        ["osv_confidence"] = s.Vulnerabilities?.OsvConfidence ?? "",
+        ["osv_count"] = s.Vulnerabilities?.OsvItems.Count,
+        ["osv_ids"] = s.Vulnerabilities is { } osv ? string.Join(" ", osv.OsvItems.Select(c => c.Id)) : "",
         ["urgent"] = s.IsUrgent,
         ["lifecycle"] = s.Lifecycle?.State.ToString() ?? "",
         ["lifecycle_eol"] = s.Lifecycle?.EolFrom?.ToString("yyyy-MM-dd") ?? "",
@@ -921,7 +1043,10 @@ public partial class SoftwareView : UserControl
         if (path is null) return;
         try
         {
-            Ui.WriteReport(path, _items.Select(ReportRow).ToList());
+            if (path.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                ReportPdf.Write(path, _items);
+            else
+                Ui.WriteReport(path, _items.Select(ReportRow).ToList());
         }
         catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
         {

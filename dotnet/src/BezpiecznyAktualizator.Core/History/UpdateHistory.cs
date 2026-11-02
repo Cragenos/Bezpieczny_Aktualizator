@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BezpiecznyAktualizator.Core.Localization;
+using BezpiecznyAktualizator.Core.Store;
 
 namespace BezpiecznyAktualizator.Core.History;
 
@@ -26,7 +28,7 @@ public sealed class UpdateRecord
 
     [JsonIgnore]
     public bool CanRollback => Kind == UpdateKind.Upgrade && !RolledBack && WingetId.Length > 0 && FromVersion.Length > 0 &&
-                               FromVersion != ToVersion;
+                               FromVersion != ToVersion && !string.Equals(Source, MicrosoftStoreClient.SourceName, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -50,14 +52,16 @@ public static class UpdateHistory
     {
         try
         {
-            return File.Exists(FilePath)
-                ? JsonSerializer.Deserialize<List<UpdateRecord>>(File.ReadAllText(FilePath), Options) ?? []
-                : [];
+            using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return JsonSerializer.Deserialize<List<UpdateRecord>>(stream, Options)
+                ?? throw new InvalidDataException(L.T("Historia aktualizacji ma nieprawidłową zawartość."));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (FileNotFoundException)
         {
             return [];
         }
+        catch (DirectoryNotFoundException) { return []; }
+        catch (JsonException ex) { throw new InvalidDataException(L.T("Historia aktualizacji jest uszkodzona i nie została zmieniona."), ex); }
     }
 
     private static void Modify(Action<List<UpdateRecord>> change)
@@ -66,24 +70,30 @@ public static class UpdateHistory
         var owned = false;
         try
         {
-            try
-            {
-                owned = mutex.WaitOne(TimeSpan.FromSeconds(10));
-            }
+            try { owned = mutex.WaitOne(TimeSpan.FromSeconds(10)); }
             catch (AbandonedMutexException)
             {
                 owned = true;
             }
+            if (!owned) throw new TimeoutException(L.T("Przekroczono czas oczekiwania na blokadę historii aktualizacji."));
             var list = Load();
             change(list);
             if (list.Count > MaxEntries) list.RemoveRange(0, list.Count - MaxEntries);
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            var temp = FilePath + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(list, Options));
-            File.Move(temp, FilePath, true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
+            var fullPath = Path.GetFullPath(FilePath);
+            var directory = Path.GetDirectoryName(fullPath)
+                ?? throw new InvalidOperationException(L.T("Nie można ustalić katalogu historii aktualizacji."));
+            Directory.CreateDirectory(directory);
+            var temp = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    JsonSerializer.Serialize(stream, list, Options);
+                File.Move(temp, fullPath, true);
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
         }
         finally
         {
@@ -96,6 +106,12 @@ public static class UpdateHistory
     public static void MarkRolledBack(Guid id) => Modify(list =>
     {
         foreach (var r in list.Where(r => r.Id == id)) r.RolledBack = true;
+    });
+
+    public static void RecordRollback(Guid id, UpdateRecord rollback) => Modify(list =>
+    {
+        foreach (var r in list.Where(r => r.Id == id)) r.RolledBack = true;
+        list.Add(rollback);
     });
 
     /// <summary>Ostatnia aktualizacja danego pakietu, którą można wycofać.</summary>

@@ -63,12 +63,14 @@ public static class Settings
         public bool? CheckSoftwareOnStart { get; set; }
         public bool? CheckDriversOnStart { get; set; }
         public bool? CheckAppUpdatesOnStart { get; set; }
+        public bool? IncludePreviewReleases { get; set; }
         public DateTimeOffset? LastAppUpdateCheck { get; set; }
         public string? Theme { get; set; }
         public ScheduleOptions? Schedule { get; set; }
         public UpdatePolicies? Policies { get; set; }
         public DateTimeOffset? ScheduleSeen { get; set; }
         public string? NvdApiKey { get; set; }
+        public NotificationOptions? Notifications { get; set; }
     }
 
     private static readonly JsonSerializerOptions Options = new()
@@ -116,6 +118,13 @@ public static class Settings
     {
         get => Read().CheckAppUpdatesOnStart ?? true;
         set => Update(d => d.CheckAppUpdatesOnStart = value);
+    }
+
+    /// <summary>Uwzględnia wydania oznaczone przez GitHub jako testowe; ich instalacja zawsze wymaga ręcznego pobrania.</summary>
+    public static bool IncludePreviewReleases
+    {
+        get => Read().IncludePreviewReleases ?? false;
+        set => Update(d => d.IncludePreviewReleases = value);
     }
 
     public static DateTimeOffset? LastAppUpdateCheck
@@ -170,6 +179,11 @@ public static class Settings
 
     /// <summary>Opcjonalny klucz API NVD (settings.json: "NvdApiKey") - zwiększa limit zapytań z 5 do 50 na 30 s.</summary>
     public static string? NvdApiKey => Read().NvdApiKey;
+
+    public static NotificationOptions Notifications => (Read().Notifications ?? new NotificationOptions()).Normalize();
+
+    public static void SaveNotifications(NotificationOptions value) =>
+        Update(d => d.Notifications = value.Normalize());
 
     private static void Update(Action<Data> change)
     {

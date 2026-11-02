@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Localization;
+using BezpiecznyAktualizator.Core.Store;
 
 namespace BezpiecznyAktualizator.Views;
 
@@ -14,7 +15,9 @@ public partial class HistoryWindow : Window
         public string TimeDisplay => Record.Time.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         public string KindDisplay => Record.Kind == UpdateKind.Rollback ? L.T("Wycofanie")
             : Record.Scheduled ? L.T("Aktualizacja (harmonogram)") : L.T("Aktualizacja");
-        public string StatusDisplay => Record.RolledBack ? L.T("wycofano") : "";
+        public string StatusDisplay => Record.RolledBack ? L.T("wycofano")
+            : Record.Kind == UpdateKind.Upgrade && string.Equals(Record.Source, MicrosoftStoreClient.SourceName, StringComparison.OrdinalIgnoreCase)
+                ? L.T("Wycofanie niemożliwe") : "";
     }
 
     public UpdateRecord? SelectedRecord { get; private set; }

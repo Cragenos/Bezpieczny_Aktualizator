@@ -47,7 +47,7 @@ public static class Ui
         var dialog = new SaveFileDialog
         {
             Title = title, FileName = fileName, DefaultExt = ".csv", AddExtension = true,
-            Filter = "CSV (*.csv)|*.csv|JSON (*.json)|*.json",
+            Filter = "CSV (*.csv)|*.csv|JSON (*.json)|*.json|PDF (*.pdf)|*.pdf",
         };
         return dialog.ShowDialog(Window.GetWindow(owner)) == true ? dialog.FileName : null;
     }
@@ -80,7 +80,7 @@ public static class Ui
 /// zapisuje przebieg w dzienniku i prezentuje błędy.
 /// </summary>
 public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, ProgressBar progress, TextBlock status,
-                                     TextBox log, Func<string> summary, string defaultEvent)
+                                     TextBox log, Func<string> summary, string defaultEvent, Func<bool>? canStart = null)
 {
     private int _busy;
     private string? _event;
@@ -124,16 +124,31 @@ public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, Prog
     }
 
     /// <summary>Wykonuje <paramref name="work"/>; zwraca false, jeśli wystąpił błąd (już zgłoszony użytkownikowi).</summary>
-    public async Task<bool> RunAsync(string msgId, string description, Func<Task> work, params Type[] expectedErrors)
+    public Task<bool> RunAsync(string msgId, string description, Func<Task> work, params Type[] expectedErrors) =>
+        RunCoreAsync(msgId, description, _ => work(), expectedErrors);
+
+    public Task<bool> RunWithProgressAsync(string msgId, string description,
+                                           Func<IProgress<string>, Task> work, params Type[] expectedErrors) =>
+        RunCoreAsync(msgId, description, work, expectedErrors);
+
+    private async Task<bool> RunCoreAsync(string msgId, string description,
+                                          Func<IProgress<string>, Task> work, Type[] expectedErrors)
     {
+        if (canStart is not null && !canStart()) return false;
         var previousEvent = _event;
         _event = msgId;
         var watch = Stopwatch.StartNew();
         SetBusy(true, description);
         Log(description);
+        var operationProgress = new Progress<string>(message =>
+        {
+            if (!IsBusy) return;
+            SetStatus(message);
+            Log(message, msgId: msgId);
+        });
         try
         {
-            await work();
+            await work(operationProgress);
             Syslog.Info(msgId, L.F("Zakończono: {0} ({1:0.0} s)", description, watch.Elapsed.TotalSeconds));
             return true;
         }

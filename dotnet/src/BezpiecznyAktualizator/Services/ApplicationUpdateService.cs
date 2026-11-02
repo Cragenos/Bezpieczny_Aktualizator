@@ -34,29 +34,42 @@ internal static class ApplicationUpdateService
                    StringComparison.OrdinalIgnoreCase);
     }
 
-    public static async Task<ApplicationRelease?> CheckAsync(CancellationToken cancellationToken = default)
+    public static Task<ReleaseCheckResult> CheckLatestAsync(CancellationToken cancellationToken = default) =>
+        CheckLatestAsync(includePrereleases: false, cancellationToken);
+
+    public static async Task<ReleaseCheckResult> CheckLatestAsync(bool includePrereleases,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(Repository))
             throw new InvalidOperationException("The update repository is not configured.");
-        return await GitHubReleaseClient.GetLatestAsync(Repository, CurrentVersion, cancellationToken).ConfigureAwait(false);
+        return await GitHubReleaseClient.CheckLatestAsync(Repository, CurrentVersion, includePrereleases, cancellationToken)
+            .ConfigureAwait(false);
     }
 
-    public static async Task<string> DownloadAndVerifyAsync(ApplicationRelease release, string expectedSigner,
+    public static async Task<string> DownloadAndVerifyAsync(ApplicationRelease release, IReadOnlyCollection<string> expectedSigners,
         CancellationToken cancellationToken = default)
     {
-        if (expectedSigner.Length != 40 || expectedSigner.Any(c => !Uri.IsHexDigit(c)))
+        var updateDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BezpiecznyAktualizator", "Updates");
+        return await DownloadAndVerifyCoreAsync(release, expectedSigners, DownloadClient, updateDirectory, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal static async Task<string> DownloadAndVerifyCoreAsync(ApplicationRelease release,
+        IReadOnlyCollection<string> expectedSigners, HttpClient client, string updateDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        if (expectedSigners.Count == 0 || expectedSigners.Any(t => !IntegrityCheck.IsThumbprint(t)))
             throw new InvalidOperationException("The trusted publisher certificate is not configured in this build.");
         if (release.Size <= 0 || release.Size > MaximumInstallerSize)
             throw new InvalidDataException("The update installer exceeds the permitted size.");
 
-        var updateDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BezpiecznyAktualizator", "Updates");
         Directory.CreateDirectory(updateDirectory);
         var finalPath = Path.Combine(updateDirectory, $"BezpiecznyAktualizator-{release.Version}.msi");
         var partialPath = finalPath + "." + Guid.NewGuid().ToString("N") + ".download";
         try
         {
-            using var response = await DownloadClient.GetAsync(release.InstallerUrl,
+            using var response = await client.GetAsync(release.InstallerUrl,
                 HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             if (response.Content.Headers.ContentLength is { } length &&
@@ -80,8 +93,7 @@ internal static class ApplicationUpdateService
                 if (total != release.Size) throw new InvalidDataException("The update installer is incomplete.");
             }
 
-            await using var downloaded = File.OpenRead(partialPath);
-            var actualHash = await SHA256.HashDataAsync(downloaded, cancellationToken).ConfigureAwait(false);
+            var actualHash = await HashFileAsync(partialPath, cancellationToken).ConfigureAwait(false);
             var expectedHash = Convert.FromHexString(release.Sha256);
             if (!CryptographicOperations.FixedTimeEquals(actualHash, expectedHash))
                 throw new InvalidDataException("The update installer SHA-256 digest does not match the release.");
@@ -89,17 +101,23 @@ internal static class ApplicationUpdateService
             var signature = Authenticode.Verify(partialPath, checkRevocation: false);
             var signer = Authenticode.SignerThumbprint(partialPath);
             if (signature.State is SignatureState.Invalid or SignatureState.Unsigned ||
-                !string.Equals(signer, expectedSigner, StringComparison.OrdinalIgnoreCase))
+                !expectedSigners.Contains(signer, StringComparer.OrdinalIgnoreCase))
                 throw new CryptographicException("The update installer signature or publisher certificate is invalid.");
 
-            if (File.Exists(finalPath)) File.Delete(finalPath);
-            File.Move(partialPath, finalPath);
+            File.Move(partialPath, finalPath, overwrite: true);
             return finalPath;
         }
         finally
         {
             if (File.Exists(partialPath)) File.Delete(partialPath);
         }
+    }
+
+    internal static async Task<byte[]> HashFileAsync(string path, CancellationToken cancellationToken = default)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
     }
 
     public static void StartMsiUpgrade(string installerPath)

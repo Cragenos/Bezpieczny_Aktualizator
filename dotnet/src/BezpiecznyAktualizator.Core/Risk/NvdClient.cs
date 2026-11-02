@@ -385,14 +385,22 @@ public static partial class NvdClient
         }
         report.Cpe = cpe;
         report.CpeOrigin = origin;
-        var cacheKey = $"{cpe}|{version}";
+        var cacheKey = $"v2|{cpe}|{version}";
+        VulnerabilityReport? cachedReport = null;
         lock (CacheLock)
         {
             if (CveCache.TryGetValue(cacheKey, out var cached) && DateTimeOffset.UtcNow - cached.CheckedAt < CveCacheTtl)
             {
                 cached.CpeOrigin = origin;
-                return cached;
+                if (cached.EpssCheckedAt is { } epssChecked && DateTimeOffset.UtcNow - epssChecked < CveCacheTtl) return cached;
+                cachedReport = cached;
             }
+        }
+        if (cachedReport is not null)
+        {
+            cachedReport.EpssError = await EpssClient.EnrichAsync(cachedReport.Items, ct);
+            if (cachedReport.EpssError is null) cachedReport.EpssCheckedAt = DateTimeOffset.UtcNow;
+            return cachedReport;
         }
         var items = new Dictionary<string, CveItem>();
         var products = cpe.Split('|');
@@ -403,6 +411,8 @@ public static partial class NvdClient
             foreach (var item in ParseCves(await QueryAsync(url, ct), products, version)) items.TryAdd(item.Id, item);
         }
         report.Items = items.Values.OrderByDescending(c => c.Exploited).ThenByDescending(c => c.Score).ToList();
+        report.EpssError = await EpssClient.EnrichAsync(report.Items, ct);
+        if (report.EpssError is null) report.EpssCheckedAt = DateTimeOffset.UtcNow;
         lock (CacheLock)
         {
             CveCache[cacheKey] = report;

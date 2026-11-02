@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Winget;
 
@@ -23,16 +24,68 @@ public sealed class InstallerVerification
     /// <summary>Skanowanie programem Microsoft Defender było wymagane, ale nie mogło zostać wykonane.</summary>
     public bool DefenderUnavailable { get; set; }
 
+    /// <summary>Aktualizacja jest zarządzana przez Microsoft Store, który nie udostępnia instalatora do niezależnego skanu.</summary>
+    public bool StoreManaged { get; set; }
+
+    public VerifiedInstaller? VerifiedInstaller { get; set; }
+
     public bool Blocked => Checks.Any(c => c.Status == CheckStatus.Fail);
 
     /// <summary>Instalator przeszedł wszystkie kontrole, łącznie z czystym wynikiem skanowania antywirusowego.</summary>
-    public bool Passed => Completed && !Blocked && !DefenderUnavailable;
+    public bool Passed => Completed && !Blocked && !DefenderUnavailable && !StoreManaged;
 
     /// <summary>Kontrole przeszły, ale skanowanie Defender nie zostało wykonane – instalacja tylko za wyraźną zgodą użytkownika.</summary>
-    public bool PassedWithoutScan => Completed && !Blocked && DefenderUnavailable;
+    public bool PassedWithoutScan => Completed && !Blocked && DefenderUnavailable && !StoreManaged;
 }
 
-public sealed record WingetInstallerManifest(string Version, string InstallerUrl, string Sha256);
+public sealed record WingetInstallerManifest(string PackageId, string Version, string InstallerUrl, string Sha256);
+
+public sealed class VerifiedInstaller : IDisposable
+{
+    private readonly string _directory;
+    private bool _disposed;
+
+    internal VerifiedInstaller(string directory, string manifestPath, string packageId, string version,
+                               string sha256, string manifestSha256)
+    {
+        _directory = directory;
+        ManifestPath = manifestPath;
+        PackageId = packageId;
+        Version = version;
+        Sha256 = sha256;
+        ManifestSha256 = manifestSha256;
+    }
+
+    public string ManifestPath { get; }
+    public string PackageId { get; }
+    public string Version { get; }
+    public string Sha256 { get; }
+    public string ManifestSha256 { get; }
+
+    internal void Validate()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!File.Exists(ManifestPath))
+            throw new WingetException(L.T("Brakuje zweryfikowanego manifestu aktualizacji."));
+        var manifestBytes = File.ReadAllBytes(ManifestPath);
+        if (manifestBytes.Length > 5 * 1024 * 1024)
+            throw new WingetException(L.T("Zweryfikowany manifest aktualizacji przekracza dozwolony rozmiar."));
+        var digest = SHA256.HashData(manifestBytes);
+        var manifest = InstallerVerifier.ParseManifest(File.ReadAllText(ManifestPath));
+        if (!CryptographicOperations.FixedTimeEquals(digest, Convert.FromHexString(ManifestSha256)) ||
+            !manifest.PackageId.Equals(PackageId, StringComparison.OrdinalIgnoreCase) ||
+            !manifest.Version.Equals(Version, StringComparison.OrdinalIgnoreCase) ||
+            !manifest.Sha256.Equals(Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new WingetException(L.T("Zweryfikowany manifest aktualizacji zmienił się przed instalacją."));
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        if (Directory.Exists(_directory)) Directory.Delete(_directory, recursive: true);
+        _disposed = true;
+    }
+}
 
 /// <summary>
 /// Sprawdza instalator przed instalacją: pobiera go przez winget do katalogu tymczasowego i porównuje
@@ -46,7 +99,8 @@ public static partial class InstallerVerifier
     public static WingetInstallerManifest ParseManifest(string yaml)
     {
         static string Value(Match m) => m.Success ? m.Groups["v"].Value.Trim().Trim('\'', '"') : "";
-        return new(Value(ManifestVersion().Match(yaml)), Value(ManifestUrl().Match(yaml)), Value(ManifestSha256().Match(yaml)).ToLowerInvariant());
+        return new(Value(ManifestPackageId().Match(yaml)), Value(ManifestVersion().Match(yaml)),
+            Value(ManifestUrl().Match(yaml)), Value(ManifestSha256().Match(yaml)).ToLowerInvariant());
     }
 
     public static async Task<InstallerVerification> VerifyAsync(string packageId, string source, Action<string>? progress = null,
@@ -56,15 +110,18 @@ public static partial class InstallerVerifier
         var result = new InstallerVerification();
         if (string.Equals(source, "msstore", StringComparison.OrdinalIgnoreCase))
         {
-            result.Checks.Add(new Check(L.Txt("Pakiet Microsoft Store"), CheckStatus.Ok,
-                L.Txt("Sklep sam weryfikuje podpis i integralność pakietu.")));
+            result.StoreManaged = true;
+            result.Checks.Add(new Check(L.Txt("Pakiet Microsoft Store"), CheckStatus.Warn,
+                L.Txt("Nie można niezależnie przeskanować instalatora Microsoft Store; aktualizacje Store nie są instalowane automatycznie.")));
             result.Completed = true;
             return result;
         }
 
         var dir = Path.Combine(Path.GetTempPath(), "BezpiecznyAktualizator", "verify-" + Guid.NewGuid().ToString("N"));
+        var retainDirectory = false;
         try
         {
+            Directory.CreateDirectory(dir);
             progress?.Invoke(L.T("Pobieranie instalatora do weryfikacji..."));
             var (code, output) = await WingetClient.DownloadAsync(packageId, dir, source, version, ct);
             if (code == WingetClient.HashMismatchCode)
@@ -82,15 +139,29 @@ public static partial class InstallerVerifier
             }
 
             var files = Directory.Exists(dir) ? Directory.GetFiles(dir) : [];
-            var yamlPath = files.FirstOrDefault(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase));
-            var installer = files.FirstOrDefault(f => !f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase));
-            if (installer is null || yamlPath is null)
+            var manifests = files.Where(f => f.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var installers = files.Except(manifests, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (manifests.Length != 1 || installers.Length != 1)
             {
-                result.Error = L.Txt("Nie znaleziono pobranego instalatora lub manifestu.");
+                result.Error = L.Txt("Nie znaleziono dokładnie jednego pobranego instalatora i manifestu.");
                 return result;
             }
+            var yamlPath = manifests[0];
+            var installer = installers[0];
 
+            var manifestInfo = new FileInfo(yamlPath);
+            if (manifestInfo.Length > 5 * 1024 * 1024)
+            {
+                result.Error = L.T("Pobrany manifest przekracza dozwolony rozmiar.");
+                return result;
+            }
             var manifest = ParseManifest(await File.ReadAllTextAsync(yamlPath, ct));
+            if (manifest.PackageId.Length == 0 || !manifest.PackageId.Equals(packageId, StringComparison.OrdinalIgnoreCase) ||
+                version.Length > 0 && !manifest.Version.Equals(version, StringComparison.OrdinalIgnoreCase))
+            {
+                result.Error = L.Txt("Pobrany manifest nie odpowiada wybranemu pakietowi lub wersji.");
+                return result;
+            }
             result.Version = manifest.Version;
             result.InstallerUrl = manifest.InstallerUrl;
             progress?.Invoke(L.T("Obliczanie sum kontrolnych SHA256/SHA512..."));
@@ -109,6 +180,13 @@ public static partial class InstallerVerifier
                 result.Checks.Add(DefenderCheck(scan));
             }
             result.Completed = true;
+            if (!result.Blocked)
+            {
+                var manifestSha256 = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(yamlPath, ct)));
+                result.VerifiedInstaller = new VerifiedInstaller(dir, yamlPath, manifest.PackageId, manifest.Version,
+                    digests.Sha256, manifestSha256);
+                retainDirectory = true;
+            }
             return result;
         }
         catch (Exception ex) when (ex is WingetException or IOException or UnauthorizedAccessException)
@@ -118,8 +196,7 @@ public static partial class InstallerVerifier
         }
         finally
         {
-            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            if (!retainDirectory && Directory.Exists(dir)) Directory.Delete(dir, true);
         }
     }
 
@@ -127,7 +204,7 @@ public static partial class InstallerVerifier
     {
         var label = L.Txt("Suma SHA256 zgodna z manifestem winget");
         if (!SecurityRules.IsSha256(manifest.Sha256))
-            return new Check(label, CheckStatus.Warn, L.Txt("Manifest nie zawiera sumy SHA256."));
+            return new Check(label, CheckStatus.Fail, L.Txt("Manifest nie zawiera sumy SHA256."));
         return string.Equals(manifest.Sha256, digests.Sha256, StringComparison.OrdinalIgnoreCase)
             ? new Check(label, CheckStatus.Ok, digests.Sha256)
             : new Check(label, CheckStatus.Fail, L.Txt("Oczekiwano {0}, obliczono {1}.", manifest.Sha256, digests.Sha256));
@@ -286,6 +363,9 @@ public static partial class InstallerVerifier
         }
     }
 
+    [GeneratedRegex(@"^PackageIdentifier:\s*(?<v>.+?)\s*$", RegexOptions.Multiline)]
+    private static partial Regex ManifestPackageId();
+
     [GeneratedRegex(@"^PackageVersion:\s*(?<v>.+?)\s*$", RegexOptions.Multiline)]
     private static partial Regex ManifestVersion();
 
@@ -294,4 +374,5 @@ public static partial class InstallerVerifier
 
     [GeneratedRegex(@"^\s*InstallerSha256:\s*(?<v>\S+)\s*$", RegexOptions.Multiline)]
     private static partial Regex ManifestSha256();
+
 }

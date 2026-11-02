@@ -6,6 +6,7 @@ using BezpiecznyAktualizator.Core.Drivers;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.Scheduling;
+using BezpiecznyAktualizator.Core.Updates;
 using BezpiecznyAktualizator.Services;
 using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
@@ -35,6 +36,13 @@ public partial class App : Application
             return;
         }
         SelfProtection.StartDebuggerWatch();
+
+        if (e.Args.Length > 0 && e.Args[0] == WindowsUpdateAgent.OperationArgument)
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _ = RunWindowsUpdateOperationAsync(e.Args);
+            return;
+        }
 
         // Tryb bez okna: proces uruchomiony z podniesionymi uprawnieniami do instalacji sterowników.
         if (e.Args.Length == 2 && e.Args[0] == WindowsUpdateDrivers.InstallArgument)
@@ -98,6 +106,54 @@ public partial class App : Application
             code = 1;
         }
         Shutdown(code);
+    }
+
+    private async Task RunWindowsUpdateOperationAsync(string[] args)
+    {
+        var exitCode = 1;
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+                throw new WindowsUpdateException(L.T("Operacja Windows Update wymaga uprawnień administratora."));
+            if (args.Length != 3 || args[1] is not ("download" or "install"))
+                throw new WindowsUpdateException(L.T("Nieprawidłowa operacja Windows Update."));
+            var action = args[1] == "download" ? WindowsUpdateAction.Download : WindowsUpdateAction.Install;
+            var selected = WindowsUpdateAgent.ParseSelection(args[2]);
+            var report = await Task.Run(() => WindowsUpdateAgent.Execute(action, selected));
+            var lines = new List<string>();
+            foreach (var result in report.Outcomes)
+            {
+                var status = result.ResultCode switch
+                {
+                    2 => L.T("Zakończono pomyślnie"),
+                    3 => L.T("Zakończono z błędami"),
+                    5 => L.T("Przerwano"),
+                    _ => L.T("Błąd"),
+                };
+                var line = $"{result.Title}: {status}";
+                if (result.HResult != 0) line += $" (0x{unchecked((uint)result.HResult):X8})";
+                if (result.Message.Length > 0) line += " - " + result.Message;
+                lines.Add(line);
+                Syslog.Write(result.Succeeded ? SyslogSeverity.Notice : SyslogSeverity.Error, LogEvent.WindowsUpdate, line);
+            }
+            foreach (var warning in report.Warnings) Syslog.Warning(LogEvent.WindowsUpdate, warning);
+            var message = L.F("Pomyślnie: {0} z {1}.", report.Outcomes.Count(o => o.Succeeded), report.Outcomes.Count) +
+                          "\n\n" + string.Join("\n", lines.Take(20));
+            if (lines.Count > 20) message += "\n…";
+            if (report.Warnings.Count > 0) message += "\n\n" + string.Join("\n", report.Warnings);
+            if (report.RebootRequired)
+                message += "\n\n" + L.T("Wymagane jest ponowne uruchomienie komputera, aby zakończyć instalację.");
+            MessageBox.Show(message, L.T("Windows Update"), MessageBoxButton.OK,
+                report.Succeeded ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            exitCode = report.Succeeded ? (report.RebootRequired ? 3010 : 0) : (report.RebootRequired ? 3011 : 1);
+        }
+        catch (Exception ex)
+        {
+            Syslog.Error(LogEvent.WindowsUpdate, L.T("Błąd operacji Windows Update."), ex);
+            MessageBox.Show(ex.Message, L.T("Windows Update"), MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        Shutdown(exitCode);
     }
 
     private static string UserDescription()

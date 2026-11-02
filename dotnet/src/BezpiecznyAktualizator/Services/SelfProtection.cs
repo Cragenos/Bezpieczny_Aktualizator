@@ -27,8 +27,17 @@ internal static class SelfProtection
     public static bool Enabled => false;
 #endif
 
-    /// <summary>Odcisk certyfikatu wydawcy wpisany podczas budowania wydania chronionego.</summary>
-    public static string ExpectedSigner => Metadata("SignerThumbprint");
+    /// <summary>Certyfikaty wydawcy z bieżącego wydania oraz bezpiecznie zaplanowanej rotacji.</summary>
+    public static IReadOnlyList<string> ExpectedSigners
+    {
+        get
+        {
+            var value = Metadata("SignerThumbprints");
+            if (value.Length == 0) value = Metadata("SignerThumbprint");
+            return value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(IntegrityCheck.IsThumbprint).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+    }
 
     public static string Author => typeof(SelfProtection).Assembly.GetCustomAttribute<AssemblyCompanyAttribute>()?.Company ?? "";
 
@@ -54,7 +63,8 @@ internal static class SelfProtection
         if (DebuggerAttached()) return L.T("Wykryto debuger podłączony do programu.");
         var path = Environment.ProcessPath;
         if (string.IsNullOrEmpty(path)) return L.T("Nie można ustalić ścieżki pliku programu.");
-        return IntegrityCheck.Problem(Authenticode.Verify(path, checkRevocation: false), Authenticode.SignerThumbprint(path), ExpectedSigner);
+        return IntegrityCheck.Problem(Authenticode.Verify(path, checkRevocation: false),
+            Authenticode.SignerThumbprint(path), ExpectedSigners);
     }
 
     /// <summary>Okresowo sprawdza, czy w trakcie działania nie podłączono debugera; jeśli tak, kończy proces.</summary>

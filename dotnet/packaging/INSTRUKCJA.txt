@@ -8,6 +8,9 @@ Zawartość paczki
   app\                  - aplikacja (BezpiecznyAktualizator.exe, podpisana) i deinstalator
   dotnet\               - oficjalny instalator Microsoft .NET Desktop Runtime (podpis Microsoft)
   cert\                 - publiczny certyfikat wydawcy (.cer), którym podpisano aplikację
+  LICENSE               - licencja MIT projektu
+  THIRD-PARTY-NOTICES.txt - informacje o licencjach zależności aplikacji
+  DOTNET-LICENSE.txt i DOTNET-THIRD-PARTY-NOTICES.txt - informacje licencyjne .NET
   runtime.json          - wersja i suma SHA512 instalatora .NET opublikowana przez Microsoft
   SHA256SUMS.txt        - sumy kontrolne wszystkich plików paczki
 
@@ -50,6 +53,7 @@ Uruchom osobny plik BezpiecznyAktualizator-<wersja>-win-x64.msi i zatwierdź UAC
 Instaluje program w Program Files, tworzy skrót w menu Start i dodaje wpis w „Aplikacje i funkcje”.
 MSI zawiera środowisko .NET i obsługuje aktualizacje główne. Odinstalowanie: Ustawienia > Aplikacje.
 Ustawienia użytkownika pozostają po odinstalowaniu. MSI nie dodaje certyfikatu do zaufanych.
+Pliki LICENSE i informacje o licencjach są instalowane obok programu.
 
 Sprawdzanie plików kontrolnych
 ------------------------------

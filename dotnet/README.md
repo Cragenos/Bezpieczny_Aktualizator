@@ -1,29 +1,43 @@
 # Bezpieczny Aktualizator 2.1 (C# / WPF)
 
-Wersja aplikacji napisana w C# na .NET 10 z interfejsem WPF. Funkcje są takie same jak w wersji Python (zob. [README](../README.md)):
+Wersja aplikacji napisana w C# na .NET 10 z interfejsem WPF, rozwijająca funkcje wersji Python (zob. [README](../README.md)):
 
 - **Oprogramowanie**:
   - inwentaryzacja programów z rejestru i z winget;
   - wyszukiwanie w katalogach winget, Microsoft Store, Scoop Main i Chocolatey Community;
   - ocena źródła aktualizacji;
   - aktualizacja przez winget;
-  - sprawdzanie podatności (CVE) w bazie NVD i oznaczanie programów z lukami jako **pilne**;
+  - sprawdzanie podatności w NVD i OSV, ocen EPSS oraz oznaczanie programów z lukami jako **pilne**;
   - wykrywanie programów nieobsługiwanych (EOL) i porzuconych;
   - skanowanie pobranego instalatora programem Microsoft Defender przed instalacją;
   - historia aktualizacji i wycofanie do poprzedniej wersji;
-  - eksport raportu do CSV lub JSON.
+  - eksport raportu do CSV, JSON i PDF.
 - **Sterowniki**:
   - inwentaryzacja przez WMI (`Win32_PnPSignedDriver` i `Win32_PnPEntity`), w tym urządzenia z problemami;
   - wyszukiwanie nowszych wersji w Windows Update przez API Windows Update Agent (COM);
   - ocena źródła;
   - instalacja z podniesionymi uprawnieniami (UAC) z opcjonalnym punktem przywracania.
-- **Program**: ikona w zasobniku, powiadomienia o dostępnych aktualizacjach, podpisana aktualizacja aplikacji z GitHub Releases i instalator MSI.
+- **Windows Update**:
+  - wyszukiwanie aktualizacji oprogramowania i identyfikatorów CVE dostępnych w metadanych Windows Update;
+  - osobne pobieranie i ręczna instalacja wybranych aktualizacji;
+  - przygotowanie paczki offline z plików MSU/CAB pobranych z Katalogu Microsoft Update.
+- **Microsoft Store**:
+  - ręczne wyszukiwanie aktualizacji rozpoznanych przez oficjalne źródło `msstore` w WinGet oraz aktualizacja wybranych pozycji z potwierdzoną wersją;
+  - otwieranie strony aktualizacji Microsoft Store, która może pokazać aplikacje niewykryte przez WinGet.
+- **Program**: ikona w nagłówku, pasku tytułu, pasku zadań i zasobniku; powiadomienia o aktualizacjach, podpisana aktualizacja aplikacji z GitHub Releases i instalator MSI.
+- **Diagnostyka**: historia ostrzeżeń i błędów z dziennika syslog oraz opcjonalne powiadomienia e-mail/Teams.
+
+W menu **Sprawdzanie przy starcie** można opcjonalnie włączyć wydania testowe aplikacji. Są one wyświetlane z fragmentem informacji o wydaniu, ale nie są pobierane ani instalowane automatycznie; przed udostępnieniem pakietu diagnostycznego sprawdź jego zawartość, ponieważ wpisy dziennika mogą ujawniać nazwy programów lub ścieżki. Wersja MSI używa wyłącznie numeru liczbowego z tagu wydania, dlatego stabilne wydanie po wersji testowej musi mieć wyższy numer liczbowy (np. po `v2.2.0-rc.1` użyj `v2.2.1`), aby aplikacja wykryła aktualizację.
 
 ## Wymagania
 
 - Windows 10/11 x64
 - [.NET 10 SDK](https://dotnet.microsoft.com/download), potrzebny tylko do budowania. Opublikowany plik `.exe` jest samodzielny (self-contained), więc działa bez zainstalowanego .NET.
 - [winget](https://github.com/microsoft/winget-cli), potrzebny do sprawdzania i instalowania aktualizacji programów.
+
+Zakładka Microsoft Store wymaga WinGet obsługującego `source export` i oficjalnie skonfigurowanego źródła `msstore`. Wyszukiwanie jest uruchamiane ręcznie po potwierdzeniu: WinGet może przekazać Microsoft informacje o zainstalowanych aplikacjach i zaakceptować warunki źródła. Dostępność i wersje zależą od danych Store i bieżącego konta; WinGet nie wykrywa wszystkich aktualizacji, a pozycje bez potwierdzonych wersji nie są wymuszane ani ponownie instalowane. Jeżeli WinGet nie zwróci tabeli wyników, program pokaże jego komunikat zamiast uznawać go za potwierdzenie braku aktualizacji. Instalacja wybranych pozycji przestrzega wykluczeń i może zaakceptować warunki pakietu. Program przekazuje WinGet rozpoznaną wersję, ale Microsoft Store może zainstalować nowszą; dlatego przy aktywnym wstrzymaniu wersji aktualizacja z `msstore` jest blokowana również w zakładce programów i harmonogramie, a wycofanie do wcześniejszej wersji jest niedostępne. Zgodność zainstalowanej wersji jest sprawdzana po aktualizacji w zakładce Microsoft Store, a niepotwierdzony wynik nie jest zapisywany jako sukces. WinGet lub Microsoft Store obsługują pobranie i instalację; program nie skanuje dodatkowo pliku Store w Microsoft Defender. Aktualizacje wykonane bezpośrednio w aplikacji Microsoft Store nie podlegają zasadom Bezpiecznego Aktualizatora.
+
+Integracja z WinGet uruchamia wyłącznie `winget.exe` z zarejestrowanego pakietu Microsoft App Installer o podpisie Microsoft; nie wybiera przypadkowego pliku `winget` z `PATH`. Dla aktualizacji z repozytorium program pobiera jeden instalator i jego manifest, wymaga sumy SHA-256, zgodności identyfikatora pakietu i wersji oraz wiąże skanowanie z tym samym lokalnym manifestem używanym do instalacji. Zależności nie są pobierane jako dodatkowe instalatory, a błędy kontroli blokują instalację. Aktualizacje Store są osobne, ręczne i wymagają potwierdzenia przez Store. Jeśli plik historii aktualizacji jest uszkodzony lub nie można go zapisać, błąd jest jawnie zgłaszany; aplikacja nie zastępuje historii pustą listą.
 
 ## Budowanie i uruchamianie
 
@@ -40,13 +54,20 @@ dotnet test --filter "Category!=Live"   # testy jednostkowe (bez dostępu do sys
 dotnet test --filter "Category=Live"    # testy na żywym systemie: rejestr, WMI, winget, Windows Update
 ```
 
+GitHub Actions uruchamia testy Python, kompilację i testy .NET oraz izolowany test MSI: instalację, aktualizację główną i odinstalowanie. Test zamknięcia pliku po weryfikacji oraz błędów pobierania działa bez dostępu do sieci. Osobny, ręczny workflow dla dedykowanej maszyny Windows sprawdza uruchomienie zaufanego WinGet i skan katalogu Windows Update bez instalowania aktualizacji. Przywracanie zależności w CI kończy się błędem, jeśli audyt NuGet zgłosi podatność (w tym w zależnościach przechodnich) lub nie może pobrać danych audytu. Każde uruchomienie tworzy SBOM CycloneDX JSON dla projektów produkcyjnych; na opublikowanym wydaniu plik jest dołączany do GitHub Release. Generator jest przypięty do wersji 6.3.1.
+
 ## Paczka instalacyjna z .NET i podpisem cyfrowym (zalecane)
 
 ```powershell
 .\packaging\Build-Package.ps1                       # certyfikat własny (tworzony automatycznie)
 .\packaging\Build-Package.ps1 -PfxPath firma.pfx -PfxPassword (Read-Host -AsSecureString)   # certyfikat komercyjny
 .\packaging\Build-Package.ps1 -CertThumbprint <odcisk>                                       # certyfikat z magazynu
+.\packaging\Build-Package.ps1 -PfxPath firma.pfx -PfxPassword (Read-Host -AsSecureString) -PublicRelease
 ```
+
+`-PublicRelease` jest wymagane dla wydania publicznego. Odrzuca certyfikaty self-signed, certyfikaty nieważne lub bez prywatnego klucza i rozszerzenia Code Signing, nie ufa łańcuchowi certyfikatów albo nieprawidłowe podpisy/znaczniki czasu plików. Tryb wymaga połączenia sieciowego do sprawdzenia odwołania certyfikatu. Nie przekazuj PFX ani hasła do repozytorium; używaj kontrolowanego środowiska wydawniczego i certyfikatu dostarczonego przez zaufany kanał. Bez dostępnego certyfikatu wydawcy można zbudować paczkę testową, ale nie należy publikować jej jako zaufanego wydania.
+
+Rotację należy przećwiczyć przed produkcyjnym użyciem: (1) zbuduj wersję pomostową z dotychczasowym certyfikatem, `-PublicRelease` i `-PreviousSignerThumbprints <NOWY_ODCISK>`; (2) sprawdź jej instalację/aktualizację oraz przejście do wydania podpisanego nowym certyfikatem; (3) zbuduj kolejne wydanie nowym certyfikatem z odciskiem poprzedniego, a następnie wydanie usuwające stary odcisk. Dodatkowe odciski muszą pochodzić z autentycznych, wcześniej opublikowanych certyfikatów projektu. Nigdy nie wyłączaj weryfikacji podpisu.
 
 Skrypt tworzy `dist\BezpiecznyAktualizator-<wersja>-win-x64\` oraz archiwum `.zip` (ok. 57 MB) z plikiem `.zip.sha256`:
 
@@ -57,19 +78,21 @@ Skrypt tworzy `dist\BezpiecznyAktualizator-<wersja>-win-x64\` oraz archiwum `.zi
 | `Instaluj.cmd`, `Install.ps1` | instalator (podpisany): sprawdza sumy SHA256 i podpisy, instaluje .NET (jeśli brak), opcjonalnie ufa certyfikatowi wydawcy, kopiuje do `Program Files`, tworzy skrót w menu Start i wpis w „Aplikacje i funkcje” |
 | `app\Uninstall.ps1` | deinstalator (podpisany) – usuwa aplikację, skróty i certyfikat z magazynów zaufanych |
 | `cert\BezpiecznyAktualizator.cer` | publiczny certyfikat wydawcy |
+| `LICENSE`, `THIRD-PARTY-NOTICES.txt` | licencja MIT projektu i informacje o zależnościach aplikacji |
+| `DOTNET-LICENSE.txt`, `DOTNET-THIRD-PARTY-NOTICES.txt` | informacje licencyjne środowiska .NET z użytego SDK |
 | `runtime.json`, `SHA256SUMS.txt` | wersja/SHA512 instalatora .NET oraz sumy kontrolne wszystkich plików |
 
 `Instaluj.cmd -VerifyOnly` sprawdza paczkę bez instalowania czegokolwiek.
 
-Oprócz tego skrypt tworzy osobną **paczkę przenośną** `dist\BezpiecznyAktualizator-<wersja>-portable-win-x64.zip` (ok. 67 MB): jeden samodzielny plik `BezpiecznyAktualizator.exe` z wbudowanym środowiskiem .NET (chroniony, skompresowany, podpisany), certyfikat wydawcy, `CZYTAJ.txt`, `INSTRUKCJA.txt` i `SHA256SUMS.txt`. Nie wymaga instalacji ani .NET – wystarczy rozpakować i uruchomić.
+Oprócz tego skrypt tworzy osobną **paczkę przenośną** `dist\BezpiecznyAktualizator-<wersja>-portable-win-x64.zip` (ok. 67 MB): jeden samodzielny plik `BezpiecznyAktualizator.exe` z wbudowanym środowiskiem .NET (chroniony, skompresowany, podpisany), certyfikat wydawcy, pliki licencyjne, `CZYTAJ.txt`, `INSTRUKCJA.txt` i `SHA256SUMS.txt`. Nie wymaga instalacji ani .NET – wystarczy rozpakować i uruchomić.
 
-Przełączniki: `-NoPortable` (bez paczki przenośnej), `-NoProtect` (wydanie bez zaciemniania i kontroli integralności, np. do diagnozowania błędów), `-NoZip`.
+Przełączniki: `-NoPortable` (bez paczki przenośnej), `-NoProtect` (wydanie bez zaciemniania i kontroli integralności, np. do diagnozowania błędów), `-NoZip`, `-NoRestore` (używa wcześniej przywróconych zależności). Parametr `-OutputDirectory <ścieżka>` zmienia katalog wyjściowy; skrypt może nadpisać istniejące paczki o tej samej wersji w wybranym katalogu.
 
 Skrypt tworzy również samodzielny, podpisany MSI `dist\BezpiecznyAktualizator-<wersja>-win-x64.msi` i plik `.msi.sha256`. MSI instaluje aplikację w `Program Files`, tworzy skrót w menu Start, jest widoczny w „Aplikacje i funkcje” i obsługuje aktualizacje główne (Major Upgrade). Ustawienia użytkownika pozostają poza katalogiem instalacji.
 
 ### Instalator MSI i aktualizacja samego programu
 
-MSI jest budowany przez [WiX Toolset 6](packaging/msi/BezpiecznyAktualizator.wixproj) i zawiera samodzielną wersję aplikacji, więc nie wymaga osobnego .NET Runtime. Uruchom plik MSI i zatwierdź UAC, aby zainstalować. Odinstalowanie odbywa się standardowo przez „Aplikacje i funkcje”; MSI nie usuwa ustawień w `%APPDATA%`.
+MSI jest budowany przez [WiX Toolset 6](packaging/msi/BezpiecznyAktualizator.wixproj) i zawiera samodzielną wersję aplikacji, więc nie wymaga osobnego .NET Runtime. Zawiera też pliki licencji projektu, zależności aplikacji i .NET. Uruchom plik MSI i zatwierdź UAC, aby zainstalować. Odinstalowanie odbywa się standardowo przez „Aplikacje i funkcje”; MSI nie usuwa ustawień w `%APPDATA%`.
 
 Domyślne repozytorium aktualizacji to [Cragenos/Bezpieczny_Aktualizator](https://github.com/Cragenos/Bezpieczny_Aktualizator). Można je zmienić w [Directory.Build.props](Directory.Build.props) (`UpdateRepository`) albo podczas pakowania: `.\packaging\Build-Package.ps1 -UpdateRepository owner/repo`. Repozytorium musi być publiczne i zawierać opublikowane stabilne wydanie. Jeśli wartość jest pusta, automatyczne sprawdzanie pozostaje wyłączone, a ręczne sprawdzenie wyświetli instrukcję konfiguracji. Aplikacja sprawdza najnowsze stabilne wydanie GitHub najwyżej raz na 24 godziny przy starcie (można wyłączyć w menu „Sprawdzanie przy starcie”) lub na żądanie z menu ikony zasobnika. Wydanie musi zawierać:
 
@@ -245,7 +268,10 @@ Opcje okna:
   - **sprawdzaj i instaluj aktualizacje z zaufanych źródeł** (domyślnie);
 - **Rozpocznij po bezczynności**: 5–60 min (domyślnie 10);
 - **Nie częściej niż co**: 4–168 godz. (domyślnie 24);
+- **Okno serwisowe** (w tym zakres przechodzący przez północ), pomijanie instalacji na baterii i w sieci taryfowej lub o nieznanym koszcie;
+- **Ponowienia instalacji**: 0–3 próby z opóźnieniem 30/60/90 sekund;
 - **Sterowniki**: sprawdzanie w Windows Update (domyślnie włączone) oraz opcjonalna automatyczna instalacja z punktem przywracania systemu (domyślnie wyłączona);
+- **Windows Update**: opcjonalne sprawdzanie (domyślnie wyłączone) oraz osobna, domyślnie wyłączona instalacja wyłącznie aktualizacji oznaczonych przez WUA jako obowiązkowe, z wcześniej zaakceptowaną licencją;
 - **Zasady aktualizacji**: podsumowanie wymaganego poziomu zaufania, wykluczeń i wstrzymanych wersji oraz przycisk otwierający okno zasad (zobacz [Zasady aktualizacji](#zasady-aktualizacji));
 - **Uruchom teraz** — natychmiastowe ciche sprawdzanie z ustawieniami z okna.
 
@@ -254,7 +280,7 @@ Zadanie `\BezpiecznyAktualizator\SilentUpdate-<użytkownik>`:
 - wyzwalacz **bezczynność komputera**;
 - działa tylko, gdy użytkownik jest zalogowany. Hasło nie jest zapisywane (`InteractiveToken`);
 - działa z **najwyższymi dostępnymi uprawnieniami**, więc instalatory nie wyświetlają monitów UAC. Z tego powodu utworzenie lub usunięcie zadania wymaga jednorazowego potwierdzenia UAC;
-- nie startuje na zasilaniu bateryjnym ani bez sieci;
+- opcjonalnie pomija instalacje na baterii oraz w sieci taryfowej lub o nierozpoznanym koszcie; sam Windows nie uruchamia zadania na baterii, gdy zaznaczono tę regułę;
 - limit czasu działania to 3 godz., zadanie nie uruchamia się w kilku kopiach jednocześnie.
 
 Przebieg cichego uruchomienia (`BezpiecznyAktualizator.exe --scheduled`, bez okna):
@@ -269,8 +295,10 @@ Przebieg cichego uruchomienia (`BezpiecznyAktualizator.exe --scheduled`, bez okn
    
    Pakiety, których nie da się w pełni zweryfikować, są **pomijane**. Dotyczy to też sytuacji, gdy Defender jest niedostępny, chyba że w ustawieniach harmonogramu zaznaczono opcję instalacji bez skanowania (domyślnie wyłączoną). Program w oknie w takiej sytuacji pyta użytkownika.
 5. Przed każdym kolejnym pakietem sprawdza, czy użytkownik wrócił do komputera (aktywność w ostatniej minucie). Jeśli tak, przerywa. Rozpoczęta instalacja nigdy nie jest przerywana.
-6. Sprawdza sterowniki w Windows Update. Instaluje je tylko po zaznaczeniu tej opcji, zawsze z punktem przywracania.
-7. Zapisuje wynik w `%LOCALAPPDATA%\BezpiecznyAktualizator\schedule-state.json` i w dzienniku syslog (MSGID `SCHEDULED`, `SW_UPGRADE`, `SW_VERIFY`, `DRV_INSTALL`). Podsumowanie pojawia się na pasku informacyjnym przy następnym otwarciu programu.
+6. Opcjonalnie sprawdza aktualizacje Windows. Automatyczna instalacja wymaga włączenia obu opcji, oznaczenia aktualizacji jako obowiązkowej i wcześniej zaakceptowanej licencji. W przypadku błędu lub potrzeby restartu dalsza instalacja aktualizacji Windows jest zatrzymywana.
+7. Sprawdza sterowniki w Windows Update. Instaluje je tylko po zaznaczeniu tej opcji, zawsze z punktem przywracania.
+8. Zapisuje wynik w `%LOCALAPPDATA%\BezpiecznyAktualizator\schedule-state.json` i w dzienniku syslog (MSGID `SCHEDULED`, `SW_UPGRADE`, `SW_VERIFY`, `DRV_INSTALL`, `WINDOWS_UPDATE`). Podsumowanie pojawia się na pasku informacyjnym przy następnym otwarciu programu.
+9. Po zakończeniu może wysłać podsumowanie e-mailem przez SMTP/TLS albo webhookiem Teams. Niepowodzenia kanału są zapisywane jako ostrzeżenia, bez ujawniania sekretu.
 
 Bez uprawnień administratora (konto standardowe) ciche uruchomienie tylko sprawdza dostępne wersje. Ustawienia są zapisywane w `settings.json` (klucz `schedule`). Deinstalator usuwa zadania z folderu `\BezpiecznyAktualizator`.
 
@@ -302,6 +330,31 @@ Kolumna **Zasada** pokazuje regułę programu, a status aktualizacji zablokowane
 ```
 
 Aby zwykli użytkownicy nie mogli zmienić pliku, pozostaw domyślne uprawnienia folderu `ProgramData` (zapis tylko dla administratorów) lub ustaw je jawnie.
+## Windows Update i paczka offline
+
+Zakładka **Windows Update** wyszukuje przez Windows Update Agent (WUA) nieukryte, niezainstalowane aktualizacje typu „Software” oferowane **bieżącemu komputerowi**. WUA korzysta z usługi skonfigurowanej w systemie, która może być zarządzana przez organizację (WSUS). Sterowniki pozostają w osobnej zakładce. Lista i szczegóły pokazują m.in. KB, rozmiar, stan pobrania, warunki licencji i identyfikatory CVE udostępnione przez WUA, również dla składników aktualizacji. Brak identyfikatorów CVE oznacza brak danych w metadanych, a nie potwierdzenie braku podatności.
+
+**Pobierz zaznaczone** pobiera zawartość do pamięci WUA bez instalacji; **Instaluj pobrane** wykonuje osobną, ręcznie potwierdzoną instalację. Operacje wymagają UAC, ponownie sprawdzają identyfikator i numer rewizji aktualizacji oraz pokazują wyniki i ewentualną potrzebę restartu. Jeżeli wymagana licencja nie jest jeszcze zaakceptowana, jej treść znajduje się w szczegółach; kontynuacja oznacza akceptację. Błędy i ostrzeżenia są widoczne w dzienniku (`WINDOWS_UPDATE`).
+
+**Korelacja MSRC:** aplikacja porównuje dokładny numer KB i miesiąc publikacji aktualizacji z danymi CVRF w API Microsoft Security Response Center. Tak uzyskane CVE są oznaczone osobno od metadanych WUA i nie są przypisywane na podstawie podobieństwa tytułu. API jest odpytywane przez HTTPS; odpowiedzi są pamiętane przez 12 godzin. Brak wyniku albo niedostępność MSRC nie potwierdza braku podatności.
+
+**Skan komputera offline:** przyciskiem **Skanuj komputer offline...** wybierz aktualny `Wsusscn2.cab`, pobrany z oficjalnego [katalogu Microsoft](https://catalog.s.download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab). Windows Update Agent weryfikuje podpis Microsoft pliku i skanuje wyłącznie lokalny komputer bez połączenia z Windows Update/WSUS. Katalog zawiera metadane aktualizacji zabezpieczeń, nie instalatory i nie wszystkie aktualizacje. Wynik można wyeksportować do JSON; raport nie jest podpisany i może ujawniać stan aktualizacji komputera.
+
+**Test na dedykowanej maszynie Windows:** ręczny workflow `Windows Update VM integration` pobiera ten katalog, a następnie uruchamia wyłącznie skan WUA; nie pobiera ani nie instaluje aktualizacji. Wymaga jednorazowego self-hosted runnera oznaczonego `windows-update-vm`, działającego jako administrator. Zwykłe CI pomija testy `Category=Live`. Test instalacji rzeczywistych aktualizacji nie jest częścią workflow; przeprowadzaj go osobno na odtwarzalnej maszynie testowej po jawnej zgodzie i z przygotowanym pakietem testowym.
+
+Przycisk **Instaluj plik MSU...** pozwala ponadto wybrać pobrany wcześniej plik z Katalogu Microsoft Update i uruchomić interaktywny systemowy instalator WUSA z UAC. WUSA może poprosić o akceptację warunków i restart. Plik musi być przeznaczony dla bieżącego systemu.
+
+### Instalacja na komputerze bez sieci
+
+WUA nie gwarantuje, że pobrana do jego pamięci zawartość jest kompletnym, przenośnym instalatorem. Dlatego paczka offline **nie eksportuje pamięci WUA** i wymaga osobnego pobrania plików:
+
+1. Na komputerze z Internetem otwórz **Katalog Microsoft Update** dla wybranej pozycji lub bez zaznaczenia. Pobierz z niego pełne pliki `.msu` albo serwisowe `.cab` odpowiednie dla **docelowej** edycji, wersji i architektury Windows. Uwzględnij wymagane aktualizacje wstępne zgodnie z artykułami KB; pliki UUP/PSF i sterownikowe CAB nie są obsługiwane przez ten instalator.
+2. Wybierz **Utwórz paczkę offline**, dodaj pobrane pliki, wybierz ważny certyfikat podpisywania kodu z kluczem prywatnym i ustaw kolejność instalacji. Powstaje ZIP z manifestem podpisanym RSA, podpisanym Authenticode instalatorem PowerShell, certyfikatem publicznym i skrótami SHA-256 wszystkich plików.
+3. Przed przeniesieniem zapoznaj się z warunkami licencji każdej aktualizacji — instalator offline ich nie wyświetla. Zapisz odcisk SHA-256 certyfikatu widoczny w kreatorze i przekaż go odbiorcy **oddzielnym, zaufanym kanałem**. Na komputerze docelowym zaufaj certyfikatowi wydawcy według polityki organizacji. Windows PowerShell musi potwierdzić ważny podpis Authenticode instalatora; nie omijaj `AllSigned` ani ostrzeżeń o podpisie. Następnie uruchom weryfikator i instalator jako administrator, wpisując niezależnie dostarczony odcisk. Skrypt nie pobiera plików z sieci i nie restartuje komputera automatycznie; używa systemowych WUSA dla MSU i DISM dla serwisowych CAB.
+4. Jeśli instalacja wymaga restartu, uruchom komputer ponownie i ten sam instalator: wznowi od kolejnego pliku. Błąd lub niejednoznaczny wynik „niepasująca albo już zainstalowana” zatrzymuje dalszą instalację i wymaga sprawdzenia. W razie potrzeby przygotuj nową paczkę z pozostałymi plikami. Dziennik i stan wznowienia znajdują się w `%ProgramData%\BezpiecznyAktualizator\OfflineUpdates\<identyfikator>`.
+
+Podpis uwierzytelnia manifest tylko wtedy, gdy odbiorca porówna odcisk z wartością uzyskaną niezależnie, a Windows ufa wydawcy podpisanego skryptu. SHA-256 wykrywa zmiany plików względem podpisanego manifestu, ale samo nie potwierdza pochodzenia plików MSU/CAB. Pobieraj je z oficjalnego katalogu i chroń nośnik. Systemowe narzędzia serwisowe stosują własne kontrole zaufania i zgodności; DISM nie sprawdza wszystkich zależności, więc należy samodzielnie zweryfikować wymagania KB i kolejność instalacji. Więcej informacji o zakresie i ograniczeniach zawiera dokumentacja Microsoft [skanowania WUA offline](https://learn.microsoft.com/en-us/windows/win32/wua_sdk/using-wua-to-scan-for-updates-offline).
+
 ## Podatności (CVE) i wsparcie (EOL)
 
 Przycisk **Sprawdź podatności i wsparcie** w zakładce „Oprogramowanie” sprawdza zaznaczone programy albo wszystkie. Wynik pojawia się w kolumnie **Ryzyko**, w szczegółach programu, w raporcie CSV/JSON i w dzienniku syslog (MSGID `SW_VULN`). Filtr **Tylko pilne i nieobsługiwane** pokazuje wyłącznie programy wymagające uwagi.
@@ -311,7 +364,7 @@ Przycisk **Sprawdź podatności i wsparcie** w zakładce „Oprogramowanie” sp
 1. Program jest przypisywany do produktu CPE (`vendor:product`). Najpierw sprawdzana jest wbudowana, przetestowana lista popularnych programów, potem identyfikator CPE z endoflife.date, a na końcu słownik CPE bazy NVD. Wynik ze słownika jest przyjmowany tylko przy jednoznacznym dopasowaniu nazwy (lub nazwy i wydawcy). Lepiej nie sprawdzić programu niż przypisać mu cudze luki.
 2. Luki zainstalowanej wersji są pobierane zapytaniem `virtualMatchString`, które uwzględnia zakresy wersji.
 3. Aplikacja dodatkowo sprawdza konfiguracje CVE i odrzuca luki dotyczące tej wersji tylko na innym systemie (np. macOS).
-4. Program z co najmniej jedną znaną luką jest oznaczany jako **PILNE** (czerwony wiersz). Wyświetlane są: liczba luk, najwyższa ocena CVSS i znacznik **KEV**, jeśli luka jest w katalogu CISA aktywnie wykorzystywanych podatności.
+4. Program z co najmniej jedną znaną luką jest oznaczany jako **PILNE** (czerwony wiersz). Wyświetlane są: liczba luk, najwyższa ocena CVSS, ocena EPSS (statystyczna szansa wykorzystania w ciągu 30 dni) i znacznik **KEV**, jeśli luka jest w katalogu CISA aktywnie wykorzystywanych podatności.
 5. Pakiety MSIX/Microsoft Store są pomijane: numer wersji pakietu nie odpowiada wersji programu, a takie pakiety aktualizuje Sklep.
 
 Ograniczenia i wydajność:
@@ -320,7 +373,7 @@ Ograniczenia i wydajność:
 - Bezpłatny [klucz API](https://nvd.nist.gov/developers/request-an-api-key) zwiększa limit do 50 zapytań. Klucz podaje się w zmiennej środowiskowej `NVD_API_KEY` albo w `settings.json` (klucz `NvdApiKey`).
 - Wyniki są zapamiętywane na 24 godz., a dopasowania CPE na 30 dni (`%LOCALAPPDATA%\BezpiecznyAktualizator\Cache`).
 
-> Baza [OSV](https://osv.dev) obejmuje ekosystemy pakietów (npm, PyPI, Maven, NuGet itd.), a nie programy instalowane w Windows. Dlatego aplikacja korzysta z NVD.
+**Dodatkowe źródła:** FIRST EPSS uzupełnia CVE o wynik prawdopodobieństwa wykorzystania (nie jest to potwierdzenie ataku). OSV jest odpytywane tylko wtedy, gdy metadane pakietu wskazują dokładny adres `https://github.com/<właściciel>/<repozytorium>`; szczegóły pokazują to repozytorium i umiarkowaną pewność dopasowania. Brak wyniku OSV nie zastępuje NVD ani nie oznacza braku luk. Błędy usług zewnętrznych są widoczne w szczegółach i dzienniku.
 
 **Wsparcie — [endoflife.date](https://endoflife.date) (MIT):**
 
@@ -361,6 +414,10 @@ Przycisk **Historia i wycofanie** pokazuje listę zmian. Po wybraniu aktualizacj
 
 > Wycofanie przywraca wersję programu, nie jego dane ani ustawienia. Część instalatorów nie pozwala zainstalować starszej wersji na nowszą. Wtedy należy najpierw odinstalować program.
 
+Przed aktualizacją samego Bezpiecznego Aktualizatora tworzona i weryfikowana jest kopia jego ustawień, historii oraz stanu harmonogramu w `%LOCALAPPDATA%\BezpiecznyAktualizator\Backups` (maksymalnie 10 archiwów z manifestem SHA-256). Klucz API NVD jest pomijany. To kopia danych aktualizatora, nie programów zewnętrznych; nie przywraca danych użytkownika ani nie zastępuje punktu przywracania Windows.
+
+**Eksport i diagnostyka:** przycisk **Eksportuj raport** zapisuje CSV/JSON albo czytelny, wielostronicowy PDF. Menu nagłówka zawiera **Historia ostrzeżeń i błędów...**, która przegląda bieżący syslog i archiwa. Konfiguracja **Powiadomienia...** pozwala włączyć e-mail przez SMTP/TLS lub webhook Teams; URL webhooka i hasło SMTP są szyfrowane DPAPI dla bieżącego konta Windows, a dziennik nie zapisuje ich wartości.
+
 ## Struktura
 
 ```
@@ -380,14 +437,15 @@ dotnet/
 │  │  ├─ Security/      Assessment.cs, SoftwareAssessor.cs,
 │  │  │              InstallerVerifier.cs, ChecksumFiles.cs, Authenticode.cs (pliki kontrolne, podpis),
 │  │  │              DefenderScanner.cs (skanowanie MpCmdRun)
-│  │  ├─ Risk/          NvdClient.cs (CVE z NVD), LifecycleClient.cs (EOL / porzucone), RiskModels.cs
+│  │  ├─ Risk/          NvdClient.cs (NVD), OsvClient.cs (dokładne repozytorium GitHub), EpssClient.cs (FIRST EPSS),
+│  │  │                 LifecycleClient.cs (EOL / porzucone), RiskModels.cs
 │  │  ├─ History/       UpdateHistory.cs            (historia aktualizacji i wycofania)
 │  │  └─ Drivers/       DriverModels.cs, DriverInventory.cs (WMI),
 │  │                    WindowsUpdateDrivers.cs (WUA COM + instalacja z UAC), DriverAssessor.cs
 │  └─ BezpiecznyAktualizator/            # aplikacja WPF
 │     ├─ App.xaml(.cs)                   # motyw Fluent i wspólne style, tryby bez okna --install-drivers <katalog> i --scheduled
 │     ├─ MainWindow.xaml                 # nagłówek, pasek informacyjny, zakładki „Oprogramowanie” i „Sterowniki”
-│     ├─ Views/         SoftwareView, DriversView, SearchWindow, ScheduleWindow (harmonogram), HistoryWindow (wycofanie),
+│     ├─ Views/         SoftwareView, DriversView, SearchWindow, ScheduleWindow, HistoryWindow, NotificationWindow, LogHistoryWindow,
 │     │                 PoliciesWindow (zasady aktualizacji), AboutWindow (o programie), MessageDialog (okna komunikatów zgodne z motywem)
 │     ├─ Services/      Ui.cs  (okna dialogowe, BackgroundRunner, raporty), Localization.cs ({l:Tr}, ustawienia),
 │     │                 Theme.cs (motyw systemowy / jasny / ciemny), ScheduledRunner.cs (ciche aktualizacje),
@@ -411,11 +469,13 @@ dotnet/
 
 ## Użyte komponenty open source
 
+- Projekt jest udostępniany na warunkach licencji [MIT](../LICENSE). Paczki instalacyjna, przenośna i MSI zawierają licencję projektu oraz informacje o licencjach użytych zależności; wydania .NET zawierają także pliki licencyjne pobrane z użytego SDK.
 - [.NET](https://github.com/dotnet/runtime) i [WPF](https://github.com/dotnet/wpf) (MIT), w tym motyw Fluent (`PresentationFramework.Fluent`)
 - [winget-cli](https://github.com/microsoft/winget-cli) i [winget-pkgs](https://github.com/microsoft/winget-pkgs) (MIT)
 - [Scoop Main](https://github.com/ScoopInstaller/Main) (Unlicense / licencje manifestów)
 - [xUnit](https://github.com/xunit/xunit) (Apache-2.0)
 - [System.Management](https://www.nuget.org/packages/System.Management) (MIT)
+- [PDFsharp](https://github.com/empira/PDFsharp) (MIT) – raport PDF
 - [Obfuscar](https://github.com/obfuscar/obfuscar) (MIT) – zaciemnianie kodu w wydaniu chronionym (tylko podczas budowania)
-- [WiX Toolset](https://github.com/wixtoolset/wix) 6.0.2 (otwarty kod źródłowy; przed użyciem komercyjnym sprawdź warunki licencyjne i opłatę utrzymaniową WiX)
-- Dane: [NVD API 2.0](https://nvd.nist.gov/developers) (NIST, domena publiczna), [katalog CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) (przez NVD), [endoflife.date](https://github.com/endoflife-date/endoflife.date) (MIT)
+- [WiX Toolset](https://github.com/wixtoolset/wix) 6.0.2 (narzędzie wyłącznie do budowania MSI, nie jest dołączane do aplikacji; kod źródłowy jest na MS-RL, a warunki dystrybucji binariów i opłat utrzymaniowych określają aktualne dokumenty WiX, w tym OSMFEULA)
+- Dane: [NVD API 2.0](https://nvd.nist.gov/developers) (NIST, domena publiczna), [FIRST EPSS](https://www.first.org/epss/), [OSV](https://osv.dev), [katalog CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) (przez NVD), [endoflife.date](https://github.com/endoflife-date/endoflife.date) (MIT)

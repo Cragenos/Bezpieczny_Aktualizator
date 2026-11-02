@@ -192,6 +192,7 @@ public partial class DriversView : UserControl
 
     private async Task<int?> SearchUpdatesAsync(bool interactive)
     {
+        if (Window.GetWindow(this) is MainWindow main && !main.CanStartWindowsUpdate(this, interactive)) return null;
         List<Driver>? installed = null;
         List<DriverUpdate>? updates = null;
         var current = _items;
@@ -254,6 +255,7 @@ public partial class DriversView : UserControl
 
     private async Task InstallAsync(List<Driver> selection)
     {
+        if (Window.GetWindow(this) is MainWindow main && !main.CanStartWindowsUpdate(this)) return;
         var restore = RestorePoint.IsChecked == true;
         if (!Ui.Confirm(this, L.T("Instalacja sterowników"), InstallConfirmation(selection, restore), warning: true)) return;
         var ids = selection.Select(d => d.Update!.UpdateId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();

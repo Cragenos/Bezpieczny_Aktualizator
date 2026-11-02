@@ -8,6 +8,9 @@ Zawartość paczki
   BezpiecznyAktualizator.exe  - gotowy do uruchomienia program (jeden plik, podpisany cyfrowo,
                                 z wbudowanym środowiskiem .NET - nie wymaga instalacji ani .NET)
   cert\                       - publiczny certyfikat wydawcy (.cer), którym podpisano program
+  LICENSE                    - licencja MIT projektu
+  THIRD-PARTY-NOTICES.txt    - informacje o licencjach zależności aplikacji
+  DOTNET-LICENSE.txt i DOTNET-THIRD-PARTY-NOTICES.txt - informacje licencyjne .NET
   INSTRUKCJA.txt              - opis funkcji programu
   SHA256SUMS.txt              - sumy kontrolne plików paczki
 
