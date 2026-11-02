@@ -13,7 +13,7 @@ function Get-MsiProductCode([string]$MsiPath) {
     try {
         $database = $installer.OpenDatabase($MsiPath, 0)
         $view = $database.OpenView('SELECT `Value` FROM `Property` WHERE `Property` = ''ProductCode''')
-        $view.Execute()
+        [void]$view.Execute()
         $record = $view.Fetch()
         if (-not $record) { throw "No ProductCode found in $MsiPath." }
         return [string]$record.StringData(1)
@@ -44,7 +44,7 @@ function Assert-MsiContainsNotices([string]$MsiPath, [string[]]$Names) {
     try {
         $database = $installer.OpenDatabase($MsiPath, 0)
         $view = $database.OpenView('SELECT `FileName` FROM `File`')
-        $view.Execute()
+        [void]$view.Execute()
         $files = @()
         while ($record = $view.Fetch()) {
             $files += ([string]$record.StringData(1) -split '\|')[-1]
@@ -176,7 +176,13 @@ try {
             Select-Object -First 1
         if (-not $msi) { throw "WiX did not produce an MSI for version $version." }
         Assert-MsiContainsNotices $msi.FullName @($noticeFiles.Values)
-        $productCodes += Get-MsiProductCode $msi.FullName
+        $codes = @(Get-MsiProductCode $msi.FullName)
+        $parsedCode = [guid]::Empty
+        if ($codes.Count -ne 1 -or -not [guid]::TryParse([string]$codes[0], [ref]$parsedCode) -or
+            $parsedCode -eq [guid]::Empty) {
+            throw "MSI version $version did not provide exactly one valid ProductCode."
+        }
+        $productCodes += [string]$codes[0]
     }
 
     if ($productCodes[0] -eq $productCodes[1]) {
@@ -184,7 +190,7 @@ try {
     }
 
     if ($BuildOnly) {
-        Write-Host 'MSI build-only test passed: both packages contain the required notices.'
+        Write-Host 'MSI build-only test passed: both packages contain notices and distinct valid ProductCodes.'
         return
     }
 
