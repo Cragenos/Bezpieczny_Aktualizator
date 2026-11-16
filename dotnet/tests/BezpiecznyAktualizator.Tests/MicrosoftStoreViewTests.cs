@@ -8,6 +8,7 @@ using BezpiecznyAktualizator.Views;
 
 namespace BezpiecznyAktualizator.Tests;
 
+[Collection(nameof(SyslogTests))]
 public class MicrosoftStoreViewTests
 {
     [Fact]

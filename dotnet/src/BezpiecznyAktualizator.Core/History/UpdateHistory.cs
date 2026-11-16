@@ -137,4 +137,15 @@ public static class UpdateHistory
         var target = Canon(wanted);
         return target.Length == 0 ? null : list.FirstOrDefault(v => Canon(v) == target);
     }
+
+    public static bool IsUpgradeVersionConfirmed(string? installed, string expected, string previous)
+    {
+        static bool IsKnown(string version) =>
+            !string.IsNullOrWhiteSpace(version) && !version.Equals("Unknown", StringComparison.OrdinalIgnoreCase);
+
+        if (!IsKnown(installed ?? "")) return false;
+        return IsKnown(expected)
+            ? FindVersion([installed!], expected) is not null
+            : IsKnown(previous) && FindVersion([previous], installed!) is null;
+    }
 }

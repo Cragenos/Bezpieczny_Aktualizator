@@ -80,10 +80,13 @@ public static class Ui
 /// zapisuje przebieg w dzienniku i prezentuje błędy.
 /// </summary>
 public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, ProgressBar progress, TextBlock status,
-                                     TextBox log, Func<string> summary, string defaultEvent, Func<bool>? canStart = null)
+                                     TextBox log, Func<string> summary, string defaultEvent, Func<bool>? canStart = null,
+                                     Button? cancelButton = null)
 {
     private int _busy;
     private string? _event;
+    private CancellationTokenSource? _activeCancellation;
+    private readonly Button? _cancelButton = cancelButton;
 
     public bool IsBusy => _busy > 0;
 
@@ -107,6 +110,20 @@ public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, Prog
         if (!IsBusy) status.Text = summary();
     }
 
+    public void CancelCurrentOperation()
+    {
+        if (_activeCancellation is not { IsCancellationRequested: false } cancellation) return;
+        cancellation.Cancel();
+        UpdateCancelButton();
+    }
+
+    private void UpdateCancelButton()
+    {
+        if (_cancelButton is null) return;
+        _cancelButton.Visibility = _activeCancellation is null ? Visibility.Collapsed : Visibility.Visible;
+        _cancelButton.IsEnabled = _activeCancellation is { IsCancellationRequested: false };
+    }
+
     private void SetBusy(bool busy, string description = "")
     {
         _busy += busy ? 1 : -1;
@@ -125,23 +142,37 @@ public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, Prog
 
     /// <summary>Wykonuje <paramref name="work"/>; zwraca false, jeśli wystąpił błąd (już zgłoszony użytkownikowi).</summary>
     public Task<bool> RunAsync(string msgId, string description, Func<Task> work, params Type[] expectedErrors) =>
-        RunCoreAsync(msgId, description, _ => work(), expectedErrors);
+        RunCoreAsync(msgId, description, (_, _) => work(), expectedErrors);
 
     /// <summary>Uruchamia operację niezależną od zasobu kontrolowanego przez canStart.</summary>
     public Task<bool> RunIndependentAsync(string msgId, string description, Func<Task> work, params Type[] expectedErrors) =>
-        RunCoreAsync(msgId, description, _ => work(), expectedErrors, checkStartCondition: false);
+        RunCoreAsync(msgId, description, (_, _) => work(), expectedErrors, checkStartCondition: false);
+
+    /// <summary>Wykonuje sprawdzenie, które może zostać anulowane przez użytkownika.</summary>
+    public Task<bool> RunCancellableAsync(string msgId, string description, Func<CancellationToken, Task> work,
+                                          params Type[] expectedErrors) =>
+        RunCoreAsync(msgId, description, (progress, token) => work(token), expectedErrors, cancellable: true);
+
+    public Task<bool> RunIndependentCancellableAsync(string msgId, string description,
+        Func<CancellationToken, Task> work, params Type[] expectedErrors) =>
+        RunCoreAsync(msgId, description, (_, token) => work(token), expectedErrors,
+            checkStartCondition: false, cancellable: true);
 
     public Task<bool> RunWithProgressAsync(string msgId, string description,
                                            Func<IProgress<string>, Task> work, params Type[] expectedErrors) =>
-        RunCoreAsync(msgId, description, work, expectedErrors);
+        RunCoreAsync(msgId, description, (progress, _) => work(progress), expectedErrors);
 
     private async Task<bool> RunCoreAsync(string msgId, string description,
-                                          Func<IProgress<string>, Task> work, Type[] expectedErrors, bool checkStartCondition = true)
+                                          Func<IProgress<string>, CancellationToken, Task> work, Type[] expectedErrors,
+                                          bool checkStartCondition = true, bool cancellable = false)
     {
         if (checkStartCondition && canStart is not null && !canStart()) return false;
         var previousEvent = _event;
         _event = msgId;
         var watch = Stopwatch.StartNew();
+        using var cancellation = cancellable ? new CancellationTokenSource() : null;
+        _activeCancellation = cancellation;
+        UpdateCancelButton();
         SetBusy(true, description);
         Log(description);
         var operationProgress = new Progress<string>(message =>
@@ -152,9 +183,17 @@ public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, Prog
         });
         try
         {
-            await work(operationProgress);
+            await work(operationProgress, cancellation?.Token ?? CancellationToken.None);
+            cancellation?.Token.ThrowIfCancellationRequested();
             Syslog.Info(msgId, L.F("Zakończono: {0} ({1:0.0} s)", description, watch.Elapsed.TotalSeconds));
             return true;
+        }
+        catch (OperationCanceledException) when (cancellation?.IsCancellationRequested == true)
+        {
+            var line = L.F("Anulowano: {0}", description);
+            Append(line);
+            Syslog.Notice(msgId, line);
+            return false;
         }
         catch (Exception ex)
         {
@@ -168,6 +207,8 @@ public sealed class BackgroundRunner(FrameworkElement owner, Panel toolbar, Prog
         }
         finally
         {
+            _activeCancellation = null;
+            UpdateCancelButton();
             _event = previousEvent;
             SetBusy(false);
         }

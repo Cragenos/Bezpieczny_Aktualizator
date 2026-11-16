@@ -23,9 +23,12 @@ public static partial class WingetClient
     private static readonly string[] CommonArgs = ["--accept-source-agreements", "--disable-interactivity"];
     private static readonly object ExecutableGate = new();
     private static readonly SemaphoreSlim CommandGate = new(1, 1);
+    internal const string ProcessCommandGateName = @"Local\BezpiecznyAktualizator.WingetCommand";
+    private static readonly Mutex ProcessCommandGate = new(false, ProcessCommandGateName);
     private static string? _cachedExecutable;
     internal delegate Task<(int Code, string Output)> CommandRunner(IReadOnlyList<string> args, CancellationToken ct);
     internal const int SourceCacheMissingCode = unchecked((int)0x80071130);
+    private const int NoApplicationsFound = unchecked((int)0x8A150014);
 
     public static bool IsAvailable()
     {
@@ -127,9 +130,28 @@ public static partial class WingetClient
     internal static async Task<T> WithCommandGateAsync<T>(Func<Task<T>> run, CancellationToken ct)
     {
         await CommandGate.WaitAsync(ct);
-        try { return await run(); }
+        try { return await WithProcessCommandGateAsync(run, ct); }
         finally { CommandGate.Release(); }
     }
+
+    private static Task<T> WithProcessCommandGateAsync<T>(Func<Task<T>> run, CancellationToken ct) =>
+        Task.Run(() =>
+        {
+            var acquired = false;
+            while (!acquired)
+            {
+                ct.ThrowIfCancellationRequested();
+                try { acquired = ProcessCommandGate.WaitOne(TimeSpan.FromMilliseconds(100)); }
+                catch (AbandonedMutexException) { acquired = true; }
+            }
+
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                return run().GetAwaiter().GetResult();
+            }
+            finally { ProcessCommandGate.ReleaseMutex(); }
+        });
 
     internal static async Task<(int Code, string Output)> RunWithSourceRetryAsync(
         IReadOnlyList<string> args, CommandRunner run, CancellationToken ct = default)
@@ -239,6 +261,32 @@ public static partial class WingetClient
         if (code != 0 && packages.Count == 0)
             throw new WingetException(L.F("winget list zakończył się kodem 0x{0:X8}:", code) + "\n" + output.Trim());
         return packages;
+    }
+
+    public static Task<string?> InstalledVersionAsync(string packageId, string source = "", CancellationToken ct = default) =>
+        InstalledVersionCoreAsync(packageId, source, (args, token) => RunAsync(args, ct: token), ct);
+
+    internal static async Task<string?> InstalledVersionCoreAsync(string packageId, string source, CommandRunner run,
+                                                                   CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+
+        var args = new List<string> { "list", "--id", packageId, "--exact" };
+        if (source.Length > 0) args.AddRange(["--source", source]);
+        args.AddRange(CommonArgs);
+        var (code, output) = await run(
+            args, ct);
+        var packages = RowsToPackages(ParseTable(output))
+            .Where(package => package.Id.Equals(packageId, StringComparison.OrdinalIgnoreCase) &&
+                              (source.Length == 0 || package.Source.Equals(source, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        if (code == NoApplicationsFound && packages.Count == 0) return null;
+        if (code != 0)
+            throw new WingetException(L.F("winget list zakończył się kodem 0x{0:X8}:", code) + "\n" + output.Trim());
+        if (packages.Count == 0) return null;
+        if (packages.Count != 1) return null;
+        var version = packages[0].Version.Trim();
+        return version.Length > 0 && !version.Equals("Unknown", StringComparison.OrdinalIgnoreCase) ? version : null;
     }
 
     public static async Task<List<WingetPackage>> ListUpgradesAsync(CancellationToken ct = default)
@@ -362,7 +410,17 @@ public static partial class WingetClient
     public static Task EnsureLocalManifestFilesEnabledAsync(CancellationToken ct = default) =>
         EnsureLocalManifestFilesEnabledCoreAsync((args, token) => RunAsync(args, ct: token), ct);
 
+    public static Task<bool> IsLocalManifestFilesEnabledAsync(CancellationToken ct = default) =>
+        IsLocalManifestFilesEnabledCoreAsync((args, token) => RunAsync(args, ct: token), ct);
+
     internal static async Task EnsureLocalManifestFilesEnabledCoreAsync(CommandRunner run, CancellationToken ct = default)
+    {
+        if (!await IsLocalManifestFilesEnabledCoreAsync(run, ct))
+            throw new WingetException(
+                L.T("WinGet: instalacja ze zweryfikowanego manifestu wymaga LocalManifestFiles=true. Poproś administratora o ocenę tej polityki; program nie zmienia jej automatycznie."));
+    }
+
+    internal static async Task<bool> IsLocalManifestFilesEnabledCoreAsync(CommandRunner run, CancellationToken ct = default)
     {
         var (code, output) = await run(["settings", "export", "--disable-interactivity"], ct);
         if (code != 0)
@@ -377,9 +435,7 @@ public static partial class WingetClient
                 !admin.TryGetProperty("LocalManifestFiles", out var enabled) ||
                 enabled.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 throw new WingetException(L.T("Nie udało się odczytać ustawienia LocalManifestFiles w WinGet."));
-            if (!enabled.GetBoolean())
-                throw new WingetException(
-                    L.T("WinGet: instalacja ze zweryfikowanego manifestu wymaga LocalManifestFiles=true. Poproś administratora o ocenę tej polityki; program nie zmienia jej automatycznie."));
+            return enabled.GetBoolean();
         }
         catch (JsonException)
         {
@@ -527,24 +583,33 @@ public static partial class WingetClient
     }
 
     /// <summary>Pełne sprawdzenie: winget list + winget upgrade, połączone z inwentarzem rejestru.</summary>
-    public static async Task<(List<Software> Items, int PackageCount)> CheckUpdatesAsync(List<Software> baseItems,
-                                                                                       CancellationToken ct = default)
+    public static Task<(List<Software> Items, int PackageCount)> CheckUpdatesAsync(List<Software> baseItems,
+                                                                                   CancellationToken ct = default) =>
+        CheckUpdatesCoreAsync(baseItems, ListInstalledAsync, ListUpgradesAsync, ct);
+
+    internal static async Task<(List<Software> Items, int PackageCount)> CheckUpdatesCoreAsync(
+        List<Software> baseItems, Func<CancellationToken, Task<List<WingetPackage>>> listInstalled,
+        Func<CancellationToken, Task<List<WingetPackage>>> listUpgrades, CancellationToken ct = default)
     {
-        foreach (var s in baseItems)
+        var packages = await listInstalled(ct);
+        ct.ThrowIfCancellationRequested();
+        var upgrades = await listUpgrades(ct);
+        ct.ThrowIfCancellationRequested();
+
+        var items = baseItems.Select(s => s.CopyForUpdateCheck()).ToList();
+        foreach (var s in items)
         {
             s.WingetDetected = false;
             s.WingetId = null;
             s.WingetSource = "";
             s.AvailableVersion = "";
         }
-        var packages = await ListInstalledAsync(ct);
-        var upgrades = await ListUpgradesAsync(ct);
         var available = new Dictionary<string, string>();
         foreach (var u in upgrades.Where(u => u.Available.Length > 0)) available[u.Id] = u.Available;
         packages = packages.Select(p => available.TryGetValue(p.Id, out var a) ? p with { Available = a } : p).ToList();
         var known = packages.Select(p => p.Id).ToHashSet();
         packages.AddRange(upgrades.Where(u => !known.Contains(u.Id)));
-        return (Merge(baseItems, packages), packages.Count);
+        return (Merge(items, packages), packages.Count);
     }
 
     [GeneratedRegex("^-{5,}$")]

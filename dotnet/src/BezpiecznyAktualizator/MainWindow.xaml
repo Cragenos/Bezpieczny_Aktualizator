@@ -51,6 +51,7 @@
                             <MenuItem Header="{l:Tr 'Zasady aktualizacji...'}" Click="Policies_Click" />
                             <MenuItem Header="{l:Tr 'Historia ostrzeżeń i błędów...'}" Click="LogHistory_Click" />
                             <MenuItem Header="{l:Tr 'Eksportuj pakiet diagnostyczny...'}" Click="ExportDiagnostics_Click" />
+                            <MenuItem Header="{l:Tr 'Przywróć kopię ustawień...'}" Click="RestoreSettings_Click" />
                             <MenuItem Header="{l:Tr 'Powiadomienia...'}" Click="Notifications_Click" />
                         </ContextMenu>
                     </Button.ContextMenu>

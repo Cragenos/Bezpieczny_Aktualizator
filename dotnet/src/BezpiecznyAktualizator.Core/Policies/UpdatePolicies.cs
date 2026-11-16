@@ -64,7 +64,7 @@ public sealed class VersionHold
          .Select(p => p.TrimStart('0') is { Length: > 0 } t ? t.ToLowerInvariant() : "0").ToArray();
 }
 
-public enum PolicyVerdict { Allowed, Excluded, Held, Untrusted, Unassessed }
+public enum PolicyVerdict { Allowed, Excluded, Held, Untrusted, Unassessed, MachinePolicyUnavailable }
 
 public sealed record PolicyDecision(PolicyVerdict Verdict, LocText Reason)
 {
@@ -162,8 +162,11 @@ public sealed class UpdatePolicies
     public bool RequiresTrust(bool automatic) => automatic || ManualRequireTrusted;
 
     /// <summary>Pełna ocena: reguły, a następnie poziom zaufania źródła (gdy jest wymagany).</summary>
-    public PolicyDecision Evaluate(Software s, bool automatic, DateTimeOffset now)
+    public PolicyDecision Evaluate(Software s, bool automatic, DateTimeOffset now, string? machinePolicyError = null)
     {
+        if (machinePolicyError is not null)
+            return new(PolicyVerdict.MachinePolicyUnavailable,
+                L.Txt("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", machinePolicyError));
         var rules = CheckRules(s, now);
         if (!rules.Allowed || !RequiresTrust(automatic)) return rules;
         if (s.SecurityLevel.Length == 0 || s.SecurityLevel == "?")

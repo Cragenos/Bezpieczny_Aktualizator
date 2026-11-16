@@ -9,12 +9,13 @@ Wersja aplikacji napisana w C# na .NET 10 z interfejsem WPF, rozwijająca funkcj
   - aktualizacja przez winget;
   - sprawdzanie podatności w NVD i OSV, ocen EPSS oraz oznaczanie programów z lukami jako **pilne**;
   - wykrywanie programów nieobsługiwanych (EOL) i porzuconych;
-  - skanowanie pobranego instalatora programem Microsoft Defender przed instalacją;
+  - skanowanie pobranego instalatora programem Microsoft Defender, z użyciem podpisanego skanera ESET gdy Defender jest niedostępny;
+  - anulowanie długich skanów, sprawdzania repozytoriów, ocen źródeł, kontroli podatności oraz wyszukiwania aktualizacji Windows i sterowników; instalacje pozostają nieprzerywane;
   - historia aktualizacji i wycofanie do poprzedniej wersji;
   - eksport raportu do CSV, JSON i PDF.
 - **Sterowniki**:
   - inwentaryzacja przez WMI (`Win32_PnPSignedDriver` i `Win32_PnPEntity`), w tym urządzenia z problemami;
-  - wyszukiwanie nowszych wersji w Windows Update przez API Windows Update Agent (COM);
+  - wyszukiwanie nowszych wersji w Windows Update przez API Windows Update Agent (COM), z możliwością anulowania;
   - ocena źródła;
   - instalacja z podniesionymi uprawnieniami (UAC) z opcjonalnym punktem przywracania.
 - **Windows Update**:
@@ -25,9 +26,9 @@ Wersja aplikacji napisana w C# na .NET 10 z interfejsem WPF, rozwijająca funkcj
   - ręczne wyszukiwanie aktualizacji rozpoznanych przez oficjalne źródło `msstore` w WinGet oraz aktualizacja wybranych pozycji z potwierdzoną wersją;
   - otwieranie strony aktualizacji Microsoft Store, która może pokazać aplikacje niewykryte przez WinGet.
 - **Program**: ikona w nagłówku, pasku tytułu, pasku zadań i zasobniku; powiadomienia o aktualizacjach, podpisana aktualizacja aplikacji z GitHub Releases i instalator MSI.
-- **Diagnostyka**: historia ostrzeżeń i błędów z dziennika syslog oraz opcjonalne powiadomienia e-mail/Teams.
+- **Diagnostyka**: historia ostrzeżeń i błędów z dziennika syslog, podgląd zanonimizowanego pakietu diagnostycznego przed zapisem oraz opcjonalne powiadomienia e-mail/Teams.
 
-W menu **Sprawdzanie przy starcie** można opcjonalnie włączyć wydania testowe aplikacji. Są one wyświetlane z fragmentem informacji o wydaniu, ale nie są pobierane ani instalowane automatycznie; przed udostępnieniem pakietu diagnostycznego sprawdź jego zawartość, ponieważ wpisy dziennika mogą ujawniać nazwy programów lub ścieżki. Wersja MSI używa wyłącznie numeru liczbowego z tagu wydania, dlatego stabilne wydanie po wersji testowej musi mieć wyższy numer liczbowy (np. po `v2.2.0-rc.1` użyj `v2.2.1`), aby aplikacja wykryła aktualizację.
+W menu **Sprawdzanie przy starcie** można opcjonalnie włączyć wydania testowe aplikacji. Są one wyświetlane z fragmentem informacji o wydaniu, ale nie są pobierane ani instalowane automatycznie. Przed zapisaniem pakietu diagnostycznego sprawdź jego podgląd, a przed udostępnieniem również zapisany plik, ponieważ wpisy dziennika mogą ujawniać nazwy programów lub ścieżki. Wersja MSI używa wyłącznie numeru liczbowego z tagu wydania, dlatego stabilne wydanie po wersji testowej musi mieć wyższy numer liczbowy (np. po `v2.2.0-rc.1` użyj `v2.2.1`), aby aplikacja wykryła aktualizację.
 
 ## Wymagania
 
@@ -39,7 +40,7 @@ Zakładka Microsoft Store wymaga WinGet obsługującego `source export` i oficja
 
 Integracja z WinGet uruchamia wyłącznie `winget.exe` z zarejestrowanego pakietu Microsoft App Installer o podpisie Microsoft; nie wybiera przypadkowego pliku `winget` z `PATH`. Dla aktualizacji z repozytorium program pobiera jeden instalator i jego manifest, wymaga sumy SHA-256, zgodności identyfikatora pakietu i wersji oraz wiąże skanowanie z tym samym lokalnym manifestem używanym do instalacji. Zależności nie są pobierane jako dodatkowe instalatory, a błędy kontroli blokują instalację. Aktualizacje Store są osobne, ręczne i wymagają potwierdzenia przez Store. Jeśli plik historii aktualizacji jest uszkodzony lub nie można go zapisać, błąd jest jawnie zgłaszany; aplikacja nie zastępuje historii pustą listą.
 
-Instalacja i wycofanie ze zweryfikowanego manifestu wymagają ustawienia administracyjnego WinGet `LocalManifestFiles=true`. Aplikacja odczytuje je przez `winget settings export` przed pobieraniem instalatora do instalacji oraz ponownie przed uruchomieniem instalacji. Wyłączone lub nieczytelne ustawienie zatrzymuje tę operację z komunikatem, zamiast wyświetlać pomoc WinGet i kod `0x8A150002`. Program nie włącza tej polityki, nie podnosi w tym celu uprawnień i nie przechodzi na instalację bez zweryfikowanego manifestu; decyzja o polityce należy do administratora. Sama weryfikacja pliku w bibliotece nie wymaga włączania tej opcji. Niedostępny Defender (np. przy aktywnym ESET) nadal wymaga dotychczasowej, osobnej zgody na pominięcie skanu; pozytywny podpis i suma nie oznaczają wykonania skanu antywirusowego.
+Instalacja i wycofanie ze zweryfikowanego manifestu wymagają ustawienia administracyjnego WinGet `LocalManifestFiles=true`. Aplikacja odczytuje je przez `winget settings export` przed pobieraniem instalatora do instalacji oraz ponownie przed uruchomieniem instalacji. Wyłączone lub nieczytelne ustawienie zatrzymuje tę operację z komunikatem, zamiast wyświetlać pomoc WinGet i kod `0x8A150002`. Program nie włącza tej polityki, nie podnosi w tym celu uprawnień i nie przechodzi na instalację bez zweryfikowanego manifestu; decyzja o polityce należy do administratora. Sama weryfikacja pliku w bibliotece nie wymaga włączania tej opcji. Niedostępny Defender uruchamia skan ESET tylko wtedy, gdy produkt jest aktywny w Zabezpieczeniach Windows, a `ecls.exe` w znanej lokalizacji ma prawidłowy podpis Authenticode wydawcy ESET. Skanowanie ESET nie wykonuje czyszczenia pliku; wykrycie blokuje instalację, a brak/awaria skanera nadal wymaga osobnej zgody na pominięcie skanu. Samo wykrycie antywirusa, podpis instalatora ani jego suma kontrolna nie oznaczają wykonania skanu.
 
 Polecenia WinGet uruchamiane przez jeden proces aplikacji nie nakładają się. Odczyt listy, wyszukiwanie i odczyt metadanych po błędzie pamięci podręcznej źródła `0x80071130` są ponawiane jeden raz po sekundzie, z ostrzeżeniem w syslog. Ponowne niepowodzenie jest zgłaszane jawnie. Instalacje, pobieranie i zmiany źródeł nie są automatycznie ponawiane przez ten mechanizm; program nie resetuje źródeł ani nie usuwa pamięci podręcznej. Nie wyklucza to konfliktów z innymi procesami WinGet uruchomionymi poza aplikacją.
 
@@ -60,7 +61,7 @@ dotnet test --filter "Category=Live"    # testy na żywym systemie: rejestr, WMI
 
 Testy paczek offline tworzą krótkotrwały certyfikat w magazynie bieżącego użytkownika i tymczasowo dodają go do zaufanych wydawców oraz urzędów głównych. Przy normalnym zakończeniu usuwają utworzony certyfikat; po przerwaniu procesu może być konieczne ręczne usunięcie go z tych magazynów. Uruchamiaj je w odizolowanym środowisku testowym, nie na komputerze produkcyjnym. Na jednorazowej maszynie GitHub-hosted CI może jawnie wybrać magazyn główny komputera, aby uniknąć ukrytego monitu zaufania; test odrzuca tę opcję na innych runnerach.
 
-GitHub Actions uruchamia testy Python, kompilację i testy .NET oraz izolowany test MSI: instalację, aktualizację główną i odinstalowanie. Test zamknięcia pliku po weryfikacji oraz błędów pobierania działa bez dostępu do sieci. Osobny, ręczny workflow dla dedykowanej maszyny Windows sprawdza uruchomienie zaufanego WinGet i skan katalogu Windows Update bez instalowania aktualizacji. Przywracanie zależności w CI kończy się błędem, jeśli audyt NuGet zgłosi podatność (w tym w zależnościach przechodnich) lub nie może pobrać danych audytu. Każde uruchomienie tworzy SBOM CycloneDX JSON dla projektów produkcyjnych; na opublikowanym wydaniu plik jest dołączany do GitHub Release. Generator jest przypięty do wersji 6.3.1.
+GitHub Actions uruchamia testy Python, kompilację i testy .NET oraz izolowany test MSI: instalację, aktualizację główną i odinstalowanie. Test zamknięcia pliku po weryfikacji oraz błędów pobierania działa bez dostępu do sieci. Osobny, ręczny workflow dla dedykowanej maszyny Windows sprawdza uruchomienie zaufanego WinGet i skan katalogu Windows Update bez instalowania aktualizacji. Testy kategorii `Live` obejmują również skanowanie tymczasowego, nieszkodliwego pliku przez ESET, jeśli aktywny ESET jest zgłoszony do Zabezpieczeń Windows. Przywracanie zależności w CI kończy się błędem, jeśli audyt NuGet zgłosi podatność (w tym w zależnościach przechodnich) lub nie może pobrać danych audytu. Każde uruchomienie tworzy SBOM CycloneDX JSON dla projektów produkcyjnych; na opublikowanym wydaniu plik jest dołączany do GitHub Release. Generator jest przypięty do wersji 6.3.1.
 
 ## Paczka instalacyjna z .NET i podpisem cyfrowym (zalecane)
 
@@ -214,20 +215,22 @@ Opcja **Sprawdzaj pliki kontrolne przed instalacją** w zakładce „Oprogramowa
 
    Obsługiwane formaty to GNU (`suma  plik`), BSD (`SHA256 (plik) = suma`), sama suma oraz `plik: suma`.
 4. Weryfikuje **podpis Authenticode** instalatora (WinVerifyTrust, z kontrolą unieważnienia certyfikatów) i zapisuje nazwę podpisującego.
-5. Skanuje pobrany instalator programem Microsoft Defender. Jeśli Defender jest niedostępny, pokazuje także informacje o antywirusach zarejestrowanych w Zabezpieczeniach Windows.
+5. Skanuje pobrany instalator programem Microsoft Defender. Jeśli Defender jest niedostępny, używa ESET tylko wtedy, gdy jest aktywny w Zabezpieczeniach Windows, a jego skaner ma prawidłowy podpis ESET.
 6. Instaluje dokładnie zweryfikowaną wersję przy użyciu lokalnego manifestu. Winget przy instalacji ponownie sprawdza tę samą sumę SHA256.
 
 | Wynik | Działanie |
 |---|---|
 | Niezgodna suma (manifest lub plik wydawcy), nieprawidłowy lub unieważniony podpis | instalacja tego programu jest **wstrzymywana** bez pytania |
 | Brak pliku kontrolnego wydawcy, instalator niepodpisany | ostrzeżenie w dzienniku, instalacja jest kontynuowana |
-| Microsoft Defender niedostępny | ostrzeżenie i pytanie o wyraźną zgodę na instalację bez skanowania (domyślnie **nie**); harmonogram domyślnie pomija aktualizację |
+| Defender i zaufany skaner ESET niedostępne | ostrzeżenie i pytanie o wyraźną zgodę na instalację bez skanowania (domyślnie **nie**); harmonogram domyślnie pomija aktualizację |
 | Weryfikacji nie można przeprowadzić (np. wydawca blokuje pobieranie) | aktualizacja jest wstrzymywana; można świadomie wyłączyć dodatkową weryfikację i zaakceptować ostrzeżenie |
 | Pakiety Microsoft Store | weryfikację wykonuje sam Sklep |
 
 Wyniki każdego sprawdzenia trafiają do zakładki „Dziennik” i do dziennika syslog (MSGID `SW_VERIFY`). Sterowniki z Windows Update są weryfikowane przez agenta Windows Update: sprawdza on podpis i skrót pakietu przed instalacją.
 
-Przycisk **Sprawdź antywirusa** w zakładce „Oprogramowanie” odczytuje z Centrum zabezpieczeń Windows listę zgłoszonych programów, ich stan ochrony oraz aktualność sygnatur. Działa niezależnie od ustawienia lokalnych manifestów winget. Interfejs Centrum zabezpieczeń jest dostępny na klienckim systemie Windows 8 lub nowszym; Windows Server nie jest obsługiwany. Brak wpisów nie wyklucza niezarejestrowanego antywirusa; niedostępność usługi jest zgłaszana jako błąd. Wykrycie ESET lub innego produktu nie uruchamia jego skanera i nie potwierdza przeskanowania instalatora. Nie zmienia również wymogu zgody na instalację bez skanowania Defenderem.
+Przycisk **Sprawdź antywirusa** w zakładce „Oprogramowanie” odczytuje z Centrum zabezpieczeń Windows listę zgłoszonych programów, ich stan ochrony oraz aktualność sygnatur; samo sprawdzenie listy nie uruchamia skanera. Podczas weryfikacji instalatora program może uruchomić ESET wyłącznie jako awaryjny skaner, gdy Defender jest niedostępny, ESET jest aktywny, a `ecls.exe` z jednej ze znanych lokalizacji ma prawidłowy podpis Authenticode wydawcy `ESET, spol. s r.o.`. Skanowanie używa trybu bez automatycznego czyszczenia i dotyczy tylko pobranego instalatora; wykrycie blokuje instalację. Brak ESET, nieprawidłowy podpis, błąd lub niejednoznaczny wynik nie są uznawane za czysty skan i nadal wymagają osobnej zgody na pominięcie skanowania. Interfejs Centrum zabezpieczeń jest dostępny na klienckim systemie Windows 8 lub nowszym; Windows Server nie jest obsługiwany.
+
+Przycisk **Sprawdź gotowość aktualizacji** pokazuje, czy WinGet jest dostępny i zweryfikowany, czy administrator włączył `LocalManifestFiles`, oraz czy w Zabezpieczeniach Windows jest aktywny Defender lub ESET z dostępnym skanerem. Nie zmienia ustawień administracyjnych i nie uruchamia skanowania.
 
 ## Automatyczne sprawdzanie wersji po uruchomieniu
 
@@ -300,10 +303,10 @@ Przebieg cichego uruchomienia (`BezpiecznyAktualizator.exe --scheduled`, bez okn
 3. Skanuje programy i sprawdza aktualizacje w winget / Microsoft Store. Pomija programy wykluczone i wstrzymane przez zasady aktualizacji (powód trafia do dziennika, MSGID `POLICY`).
 4. Dla każdej aktualizacji:
    - ocenia źródło i akceptuje tylko poziom zaufania wymagany przez zasady;
-   - pobiera i weryfikuje instalator (suma SHA-256 z manifestu, pliki kontrolne wydawcy, podpis Authenticode, skanowanie Microsoft Defender);
+   - pobiera i weryfikuje instalator (suma SHA-256 z manifestu, pliki kontrolne wydawcy, podpis Authenticode, skanowanie Defendera lub — gdy jest niedostępny — zaufanego ESET);
    - instaluje przez winget **dokładnie zweryfikowaną wersję**.
    
-   Pakiety, których nie da się w pełni zweryfikować, są **pomijane**. Dotyczy to też sytuacji, gdy Defender jest niedostępny, chyba że w ustawieniach harmonogramu zaznaczono opcję instalacji bez skanowania (domyślnie wyłączoną). Program w oknie w takiej sytuacji pyta użytkownika.
+   Pakiety, których nie da się w pełni zweryfikować, są **pomijane**. Jeśli niedostępny jest również zaufany skaner ESET, harmonogram pomija aktualizację, chyba że w ustawieniach zaznaczono opcję instalacji bez skanowania (domyślnie wyłączoną). Program w oknie w takiej sytuacji pyta użytkownika.
 5. Przed każdym kolejnym pakietem sprawdza, czy użytkownik wrócił do komputera (aktywność w ostatniej minucie). Jeśli tak, przerywa. Rozpoczęta instalacja nigdy nie jest przerywana.
 6. Opcjonalnie sprawdza aktualizacje Windows. Automatyczna instalacja wymaga włączenia obu opcji, oznaczenia aktualizacji jako obowiązkowej i wcześniej zaakceptowanej licencji. W przypadku błędu lub potrzeby restartu dalsza instalacja aktualizacji Windows jest zatrzymywana.
 7. Sprawdza sterowniki w Windows Update. Instaluje je tylko po zaznaczeniu tej opcji, zawsze z punktem przywracania.
@@ -343,6 +346,8 @@ Aby zwykli użytkownicy nie mogli zmienić pliku, pozostaw domyślne uprawnienia
 ## Windows Update i paczka offline
 
 Zakładka **Windows Update** wyszukuje przez Windows Update Agent (WUA) nieukryte, niezainstalowane aktualizacje typu „Software” oferowane **bieżącemu komputerowi**. WUA korzysta z usługi skonfigurowanej w systemie, która może być zarządzana przez organizację (WSUS). Sterowniki pozostają w osobnej zakładce. Lista i szczegóły pokazują m.in. KB, rozmiar, stan pobrania, warunki licencji i identyfikatory CVE udostępnione przez WUA, również dla składników aktualizacji. Brak identyfikatorów CVE oznacza brak danych w metadanych, a nie potwierdzenie braku podatności.
+
+Wyszukiwanie można przerwać przyciskiem **Anuluj**. Wyniki są publikowane dopiero po zakończeniu wyszukiwania i pobrania metadanych MSRC; anulowanie nie zastępuje wcześniej wyświetlonej listy częściowym wynikiem.
 
 **Pobierz zaznaczone** pobiera zawartość do pamięci WUA bez instalacji; **Instaluj pobrane** wykonuje osobną, ręcznie potwierdzoną instalację. Operacje wymagają UAC, ponownie sprawdzają identyfikator i numer rewizji aktualizacji oraz pokazują wyniki i ewentualną potrzebę restartu. Jeżeli wymagana licencja nie jest jeszcze zaakceptowana, jej treść znajduje się w szczegółach; kontynuacja oznacza akceptację. Błędy i ostrzeżenia są widoczne w dzienniku (`WINDOWS_UPDATE`).
 
@@ -392,15 +397,15 @@ Ograniczenia i wydajność:
   - Wersja, której wsparcie skończyło się niedawno (do 60 dni) w związku z wydaniem następcy (np. Firefox), nie jest oznaczana jako EOL. Wystarczy zwykła aktualizacja.
 - **Porzucony** — repozytorium GitHub projektu jest zarchiwizowane lub nieaktywne od ponad 3 lat, albo ostatnie wydanie w winget jest starsze niż 3 lata.
 
-## Skanowanie instalatora programem Microsoft Defender
+## Skanowanie instalatora programem Microsoft Defender i ESET
 
-Przy włączonej opcji **Sprawdzaj pliki kontrolne przed instalacją** pobrany instalator jest dodatkowo skanowany programem Microsoft Defender. Używane jest polecenie `MpCmdRun.exe -Scan -ScanType 3 -File <plik> -DisableRemediation`. Działa to także w harmonogramie cichych aktualizacji i przy wycofywaniu aktualizacji. Instalator jest uznany za zweryfikowany tylko przy czystym wyniku skanowania.
+Przy włączonej opcji **Sprawdzaj pliki kontrolne przed instalacją** pobrany instalator jest skanowany programem Microsoft Defender poleceniem `MpCmdRun.exe -Scan -ScanType 3 -File <plik> -DisableRemediation`. Jeśli Defender jest niedostępny, program używa skanera ESET tylko przy aktywnym produkcie zarejestrowanym w Zabezpieczeniach Windows i prawidłowym podpisie ESET pliku `ecls.exe`. Skan ESET używa `/clean-mode=none` i `/no-subdir`, więc skanuje wyłącznie wskazany plik bez automatycznego czyszczenia. Działa to także w harmonogramie cichych aktualizacji i przy wycofywaniu aktualizacji. Instalator jest uznany za przeskanowany tylko po czystym wyniku jednego ze skanerów; brak/awaria skanera nie oznacza czystego wyniku.
 
 | Wynik | Działanie |
 |---|---|
-| Wykryto zagrożenie | instalacja jest **blokowana** (także w trybie cichym), nazwa zagrożenia trafia do dziennika |
+| Wykryto zagrożenie | instalacja jest **blokowana** (także w trybie cichym); Defender podaje nazwę zagrożenia, ESET kod wyniku |
 | Brak zagrożeń | instalacja może być kontynuowana |
-| Defender niedostępny (np. aktywny inny antywirus, który go wyłącza) | w oknie programu instalacja jest **wstrzymywana** do wyraźnej decyzji użytkownika (domyślny przycisk to „Nie”). W harmonogramie pakiet jest **pomijany**, chyba że w ustawieniach harmonogramu zaznaczono „Instaluj także wtedy, gdy Microsoft Defender jest niedostępny”. Każda decyzja trafia do dziennika |
+| Defender niedostępny | jeśli ESET nie jest aktywny lub jego skaner nie przejdzie kontroli podpisu, w oknie programu instalacja jest **wstrzymywana** do wyraźnej decyzji użytkownika (domyślny przycisk to „Nie”). W harmonogramie pakiet jest **pomijany**, chyba że w ustawieniach harmonogramu zaznaczono „Instaluj także wtedy, gdy Microsoft Defender jest niedostępny”. Każda decyzja trafia do dziennika |
 
 Wyłączenie opcji **Sprawdzaj pliki kontrolne przed instalacją** wyłącza także skanowanie, dlatego program prosi wtedy o potwierdzenie i zapisuje tę zmianę w dzienniku.
 
@@ -424,7 +429,7 @@ Przycisk **Historia i wycofanie** pokazuje listę zmian. Po wybraniu aktualizacj
 
 > Wycofanie przywraca wersję programu, nie jego dane ani ustawienia. Część instalatorów nie pozwala zainstalować starszej wersji na nowszą. Wtedy należy najpierw odinstalować program.
 
-Przed aktualizacją samego Bezpiecznego Aktualizatora tworzona i weryfikowana jest kopia jego ustawień, historii oraz stanu harmonogramu w `%LOCALAPPDATA%\BezpiecznyAktualizator\Backups` (maksymalnie 10 archiwów z manifestem SHA-256). Klucz API NVD jest pomijany. To kopia danych aktualizatora, nie programów zewnętrznych; nie przywraca danych użytkownika ani nie zastępuje punktu przywracania Windows.
+Przed aktualizacją samego Bezpiecznego Aktualizatora tworzona i weryfikowana jest kopia jego ustawień, historii oraz stanu harmonogramu w `%LOCALAPPDATA%\BezpiecznyAktualizator\Backups` (maksymalnie 10 archiwów z manifestem SHA-256). Z menu głównego można wybrać **Przywróć kopię ustawień...**: aplikacja weryfikuje archiwum, tworzy kopię bieżącego stanu, zachowuje aktualny klucz API NVD i po przywróceniu zaleca ponowne uruchomienie. Klucz API NVD nie jest zapisywany w kopii. To kopia danych aktualizatora, nie programów zewnętrznych; nie przywraca danych użytkownika ani nie zastępuje punktu przywracania Windows.
 
 **Eksport i diagnostyka:** przycisk **Eksportuj raport** zapisuje CSV/JSON albo czytelny, wielostronicowy PDF. Menu nagłówka zawiera **Historia ostrzeżeń i błędów...**, która przegląda bieżący syslog i archiwa. Konfiguracja **Powiadomienia...** pozwala włączyć e-mail przez SMTP/TLS lub webhook Teams; URL webhooka i hasło SMTP są szyfrowane DPAPI dla bieżącego konta Windows, a dziennik nie zapisuje ich wartości.
 

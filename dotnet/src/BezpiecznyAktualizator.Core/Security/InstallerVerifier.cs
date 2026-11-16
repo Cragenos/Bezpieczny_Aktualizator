@@ -24,6 +24,12 @@ public sealed class InstallerVerification
     /// <summary>Skanowanie programem Microsoft Defender było wymagane, ale nie mogło zostać wykonane.</summary>
     public bool DefenderUnavailable { get; set; }
 
+    /// <summary>Skanowanie antywirusowe nie zostało uruchomione.</summary>
+    public bool ScanSkipped { get; set; }
+
+    /// <summary>Skan instalatora przez co najmniej jeden antywirus zakończył się czysto.</summary>
+    public bool AntivirusScanPassed { get; set; }
+
     /// <summary>Informacja o programach zarejestrowanych w Windows, gdy skanowanie Defender jest niedostępne.</summary>
     public Check? AntivirusInventoryCheck { get; internal set; }
 
@@ -35,10 +41,12 @@ public sealed class InstallerVerification
     public bool Blocked => Checks.Any(c => c.Status == CheckStatus.Fail);
 
     /// <summary>Instalator przeszedł wszystkie kontrole, łącznie z czystym wynikiem skanowania antywirusowego.</summary>
-    public bool Passed => Completed && !Blocked && !DefenderUnavailable && !StoreManaged;
+    public bool Passed => Completed && !Blocked && !StoreManaged &&
+                          (AntivirusScanPassed || !DefenderUnavailable && !ScanSkipped);
 
-    /// <summary>Kontrole przeszły, ale skanowanie Defender nie zostało wykonane – instalacja tylko za wyraźną zgodą użytkownika.</summary>
-    public bool PassedWithoutScan => Completed && !Blocked && DefenderUnavailable && !StoreManaged;
+    /// <summary>Kontrole przeszły, ale skanowanie antywirusowe nie zostało wykonane.</summary>
+    public bool PassedWithoutScan => Completed && !Blocked && !AntivirusScanPassed &&
+                                     (DefenderUnavailable || ScanSkipped) && !StoreManaged;
 }
 
 public sealed record WingetInstallerManifest(string PackageId, string Version, string InstallerUrl, string Sha256);
@@ -180,6 +188,21 @@ public static partial class InstallerVerifier
                 progress?.Invoke(L.T("Skanowanie instalatora programem Microsoft Defender..."));
                 var scan = await DefenderScanner.ScanFileAsync(installer, ct);
                 await AddDefenderResultAsync(result, scan, AntivirusInventory.GetRegisteredProducts, ct);
+                if (scan.Verdict == DefenderVerdict.Clean)
+                    result.AntivirusScanPassed = true;
+                else if (scan.Verdict == DefenderVerdict.Unavailable)
+                {
+                    progress?.Invoke(L.T("Skanowanie instalatora programem ESET..."));
+                    var esetScan = await EsetScanner.ScanFileAsync(installer, ct);
+                    result.Checks.Add(EsetScanner.Check(esetScan));
+                    result.AntivirusScanPassed = esetScan.Verdict == EsetVerdict.Clean;
+                }
+            }
+            else
+            {
+                result.ScanSkipped = true;
+                result.Checks.Add(new Check(L.Txt("Skanowanie Microsoft Defender"), CheckStatus.Warn,
+                    L.Txt("Skanowanie antywirusowe pominięto celowo.")));
             }
             result.Completed = true;
             if (!result.Blocked)

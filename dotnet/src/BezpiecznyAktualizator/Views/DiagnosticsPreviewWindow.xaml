@@ -1,0 +1,20 @@
+<Window x:Class="BezpiecznyAktualizator.Views.DiagnosticsPreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="clr-namespace:BezpiecznyAktualizator.Services"
+        Title="{l:Tr 'Podgląd pakietu diagnostycznego'}"
+        Width="900" Height="600" MinWidth="620" MinHeight="360"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap"
+                   Text="{l:Tr 'Pakiet zawiera wersję aplikacji, wersję systemu i ostatnie ostrzeżenia/błędy. Nie zawiera ustawień, klucza API, historii aktualizacji ani listy zainstalowanych programów. Wpisy mogą zawierać nazwy programów lub ścieżki; przed udostępnieniem sprawdź zapisany plik. Kontynuować?'}" />
+        <WrapPanel DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="{l:Tr 'Kontynuuj do zapisu'}" Padding="12,4" Margin="0,0,8,0"
+                    IsDefault="True" Click="Continue_Click" />
+            <Button Content="{l:Tr 'Anuluj'}" Padding="12,4" IsCancel="True" />
+        </WrapPanel>
+        <TextBox x:Name="PreviewText" Style="{StaticResource LogBox}" IsReadOnly="True"
+                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                 TextWrapping="NoWrap" />
+    </DockPanel>
+</Window>

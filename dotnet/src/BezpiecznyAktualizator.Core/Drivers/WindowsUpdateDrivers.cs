@@ -65,11 +65,31 @@ public static partial class WindowsUpdateDrivers
 
     /// <summary>Wyszukuje sterowniki oferowane dla tego komputera (może potrwać kilka minut, nie wymaga administratora).</summary>
     public static List<DriverUpdate> Search()
+        => SearchAsync().GetAwaiter().GetResult();
+
+    public static async Task<List<DriverUpdate>> SearchAsync(CancellationToken ct = default)
     {
         try
         {
-            List<dynamic> raw = SearchRaw((object)CreateSession());
-            return raw.Select(u => (DriverUpdate)ToModel(u)).Where(u => u.UpdateId.Length > 0).ToList();
+            ct.ThrowIfCancellationRequested();
+            dynamic session = CreateSession();
+            dynamic searcher = session.CreateUpdateSearcher();
+            searcher.Online = true;
+            dynamic result = await WindowsUpdateInterop.SearchAsync((object)searcher, Criteria, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            dynamic updates = result.Updates;
+            var list = new List<DriverUpdate>();
+            for (var i = 0; i < (int)updates.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var update = ToModel((object)updates.Item[i]);
+                if (update.UpdateId.Length > 0) list.Add(update);
+            }
+            return list;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (COMException ex)
         {

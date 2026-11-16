@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Security;
 using System.Text.Json;
 using System.Windows.Data;
 using System.Windows.Markup;
@@ -52,8 +53,32 @@ public sealed class TrExtension(string text) : MarkupExtension
 /// <summary>Ustawienia użytkownika w %APPDATA%\BezpiecznyAktualizator\settings.json.</summary>
 public static class Settings
 {
-    private static readonly string FilePath = Path.Combine(
+    private static readonly object Gate = new();
+    private static string _filePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BezpiecznyAktualizator", "settings.json");
+    private static string? _readError;
+    private static string? _writeError;
+    private static string? _reportedReadError;
+
+    internal static string FilePath
+    {
+        get { lock (Gate) return _filePath; }
+        set
+        {
+            lock (Gate)
+            {
+                _filePath = Path.GetFullPath(value);
+                _readError = null;
+                _writeError = null;
+                _reportedReadError = null;
+            }
+        }
+    }
+
+    public static string? PersistenceError
+    {
+        get { lock (Gate) return _readError ?? _writeError; }
+    }
 
     // Zapisywana w settings.json: nazwy właściwości nie mogą być zmieniane przez zaciemnianie kodu.
     [System.Reflection.Obfuscation(Exclude = true)]
@@ -80,17 +105,36 @@ public static class Settings
 
     private static Data Read()
     {
-        try
+        lock (Gate)
         {
-            var data = File.Exists(FilePath) ? JsonSerializer.Deserialize<Data>(File.ReadAllText(FilePath), Options) ?? new() : new();
-            // Wykluczenia i poziom zaufania z dawnych ustawień harmonogramu trafiają do zasad (zapis przy najbliższej zmianie).
-            if (data.Schedule is { } schedule && (schedule.Excluded is not null || schedule.AllowMediumTrust is not null))
-                schedule.MigrateTo(data.Policies ??= new UpdatePolicies());
-            return data;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            return new();
+            try
+            {
+                Data data;
+                try
+                {
+                    data = JsonSerializer.Deserialize<Data>(File.ReadAllText(FilePath), Options) ?? new();
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    data = new();
+                }
+                // Wykluczenia i poziom zaufania z dawnych ustawień harmonogramu trafiają do zasad (zapis przy najbliższej zmianie).
+                if (data.Schedule is { } schedule && (schedule.Excluded is not null || schedule.AllowMediumTrust is not null))
+                    schedule.MigrateTo(data.Policies ??= new UpdatePolicies());
+                _readError = null;
+                _reportedReadError = null;
+                return data;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or SecurityException)
+            {
+                _readError = ex.Message;
+                if (_reportedReadError != _readError)
+                {
+                    Syslog.Error(LogEvent.Settings, $"Could not read settings file '{FilePath}'. Defaults are in use and the file will not be overwritten.", ex);
+                    _reportedReadError = _readError;
+                }
+                return new();
+            }
         }
     }
 
@@ -162,16 +206,18 @@ public static class Settings
     /// </summary>
     public static UpdatePolicies Policies
     {
-        get
-        {
-            var user = (Read().Policies ?? new UpdatePolicies()).Normalize();
-            var machine = UpdatePolicies.LoadMachine(out var error);
-            if (error is not null && error != _machinePolicyError)
-                Syslog.Error(LogEvent.Policy, L.F("Nie udało się wczytać zasad komputera: {0}", error));
-            _machinePolicyError = error;
-            return user.MergeMachine(machine);
-        }
+        get => LoadPolicies(out _);
         set => Update(d => d.Policies = value.UserPart());
+    }
+
+    public static UpdatePolicies LoadPolicies(out string? error)
+    {
+        var user = (Read().Policies ?? new UpdatePolicies()).Normalize();
+        var machine = UpdatePolicies.LoadMachine(out error);
+        if (error is not null && error != _machinePolicyError)
+            Syslog.Error(LogEvent.Policy, L.F("Nie udało się wczytać zasad komputera: {0}", error));
+        _machinePolicyError = error;
+        return user.MergeMachine(machine);
     }
 
     /// <summary>Błąd odczytu zasad komputera z ostatniego wczytania (null - brak błędu).</summary>
@@ -187,13 +233,45 @@ public static class Settings
 
     private static void Update(Action<Data> change)
     {
-        try
+        lock (Gate)
         {
             var data = Read();
-            change(data);
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(data, Options));
+            if (_readError is not null)
+            {
+                Syslog.Error(LogEvent.Settings, $"Settings were not saved because the existing file could not be read: '{FilePath}'.");
+                return;
+            }
+
+            var directory = Path.GetDirectoryName(FilePath)!;
+            var temporaryPath = Path.Combine(directory, $"{Path.GetFileName(FilePath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                change(data);
+                Directory.CreateDirectory(directory);
+                using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    JsonSerializer.Serialize(stream, data, Options);
+                    stream.Flush(flushToDisk: true);
+                }
+                File.Move(temporaryPath, FilePath, overwrite: true);
+                _writeError = null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or SecurityException)
+            {
+                _writeError = ex.Message;
+                Syslog.Error(LogEvent.Settings, $"Could not atomically save settings to '{FilePath}'.", ex);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+                {
+                    Syslog.Warning(LogEvent.Settings, $"Could not remove temporary settings file '{temporaryPath}': {ex.Message}");
+                }
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 }

@@ -37,6 +37,37 @@ public class WindowsUpdateTests
     }
 
     [Fact]
+    public async Task AsyncSearchCancellationAbortsAndCleansUpAfterCompletion()
+    {
+        using var cancellation = new CancellationTokenSource();
+        Action? complete = null;
+        var abortRequested = false;
+        var endCalled = false;
+        var cleanupCalled = false;
+        var search = WindowsUpdateInterop.SearchAsyncCore(
+            completed => complete = completed,
+            () =>
+            {
+                abortRequested = true;
+                complete!();
+            },
+            () =>
+            {
+                endCalled = true;
+                return "result";
+            },
+            () => cleanupCalled = true,
+            cancellation.Token);
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => search);
+        Assert.True(abortRequested);
+        Assert.True(endCalled);
+        Assert.True(cleanupCalled);
+    }
+
+    [Fact]
     public void MapsKbAndBundledCvesAndReportsMissingCveMetadata()
     {
         var update = new FakeUpdate(FirstId, 7)

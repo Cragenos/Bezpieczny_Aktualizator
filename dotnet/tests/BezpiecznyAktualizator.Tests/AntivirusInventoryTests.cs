@@ -6,6 +6,47 @@ namespace BezpiecznyAktualizator.Tests;
 
 public class AntivirusInventoryTests
 {
+    [Fact]
+    public void EsetScanRequiresAnActiveRegisteredProductAndTrustedSignature()
+    {
+        Assert.True(EsetScanner.IsActiveEset(
+            [new("ESET Security", AntivirusProtectionState.On, AntivirusSignatureStatus.UpToDate)]));
+        Assert.False(EsetScanner.IsActiveEset(
+            [new("ESET Security", AntivirusProtectionState.Off, AntivirusSignatureStatus.UpToDate)]));
+        Assert.False(EsetScanner.IsTrustedScannerSignature(
+            new(SignatureState.Valid, 0, "Other Publisher")));
+        Assert.False(EsetScanner.IsTrustedScannerSignature(
+            new(SignatureState.Invalid, 1, "ESET, spol. s r.o.")));
+        Assert.True(EsetScanner.IsTrustedScannerSignature(
+            new(SignatureState.Valid, 0, "ESET, spol. s r.o.")));
+    }
+
+    [Theory]
+    [InlineData(0, EsetVerdict.Clean)]
+    [InlineData(1, EsetVerdict.Threat)]
+    [InlineData(50, EsetVerdict.Threat)]
+    [InlineData(10, EsetVerdict.Unavailable)]
+    [InlineData(100, EsetVerdict.Unavailable)]
+    [InlineData(101, EsetVerdict.Unavailable)]
+    public void EsetExitCodesAreClassifiedConservatively(int exitCode, EsetVerdict expected)
+    {
+        var result = EsetScanner.Parse(exitCode);
+        Assert.Equal(expected, result.Verdict);
+        Assert.Equal(expected == EsetVerdict.Clean ? CheckStatus.Ok :
+                     expected == EsetVerdict.Threat ? CheckStatus.Fail : CheckStatus.Warn,
+            EsetScanner.Check(result).Status);
+    }
+
+    [Fact]
+    public void EsetScanDoesNotDeleteOrTraverseOtherFiles()
+    {
+        var args = EsetScanner.ScanArguments(Path.Combine(Path.GetTempPath(), "safe-test.exe"));
+        Assert.Contains("/clean-mode=none", args);
+        Assert.Contains("/no-subdir", args);
+        Assert.DoesNotContain("/auto", args);
+        Assert.EndsWith("safe-test.exe", args[^1], StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(0, AntivirusProtectionState.On)]
     [InlineData(1, AntivirusProtectionState.Off)]
@@ -122,5 +163,24 @@ public class AntivirusInventoryTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             InstallerVerifier.AddDefenderResultAsync(new InstallerVerification(),
                 new DefenderScan(DefenderVerdict.Unavailable, [], "unavailable"), () => [], cancellation.Token));
+    }
+
+    [Fact]
+    [Trait("Category", "Live")]
+    public async Task EsetScannerScansOnlyABenignTemporaryFileWithoutRemediation()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var products = await Task.Run(AntivirusInventory.GetRegisteredProducts);
+        var path = Path.Combine(Path.GetTempPath(), $"ba-eset-smoke-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "Benign updater scanner verification test file.");
+        try
+        {
+            var scan = await EsetScanner.ScanFileAsync(path);
+            Assert.Equal(EsetScanner.IsActiveEset(products) ? EsetVerdict.Clean : EsetVerdict.Unavailable, scan.Verdict);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

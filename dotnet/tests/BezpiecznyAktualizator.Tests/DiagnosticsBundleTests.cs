@@ -10,14 +10,31 @@ public class DiagnosticsBundleTests
     [Fact]
     public void RedactsCredentialValuesUserPathsAndUrlPaths()
     {
-        const string input = @"Access token=top-secret C:\Users\alice\AppData\Local\log https://example.org/hooks/private?key=secret Authorization: Bearer bearer-secret";
+        const string input = @"Access token=top-secret C:\Users\alice\AppData\Local\log https://example.org/hooks/private?key=secret https://alice:url-password@example.net/private?token=hidden Authorization: Bearer bearer-secret";
         var output = DiagnosticsBundle.Redact(input);
         Assert.DoesNotContain("top-secret", output);
         Assert.DoesNotContain("C:\\Users\\alice", output);
         Assert.DoesNotContain("/hooks/private", output);
         Assert.DoesNotContain("******", output);
+        Assert.DoesNotContain("url-password", output);
+        Assert.DoesNotContain("alice", output);
         Assert.Contains("%USERPROFILE%", output);
         Assert.Contains("https://example.org/[REDACTED]", output);
+        Assert.Contains("https://example.net/[REDACTED]", output);
+    }
+
+    [Fact]
+    public void PreviewShowsTheExactRedactedLogThatWillBePackaged()
+    {
+        var issues = new[]
+        {
+            @"<11>1 warning C:\Users\alice\AppData\log token=hidden",
+        };
+        var preview = DiagnosticsBundle.Preview(issues);
+
+        Assert.Contains("%USERPROFILE%", preview);
+        Assert.DoesNotContain("hidden", preview);
+        Assert.Equal(preview, DiagnosticsBundle.Preview(issues));
     }
 
     [Fact]
@@ -25,12 +42,13 @@ public class DiagnosticsBundleTests
     {
         var directory = Path.Combine(Path.GetTempPath(), "ba-diagnostics-" + Guid.NewGuid().ToString("N"));
         var path = Path.Combine(directory, "diagnostics.zip");
+        var issues = new[]
+        {
+            @"<11>1 warning C:\Users\alice\AppData\log token=hidden",
+        };
         try
         {
-            DiagnosticsBundle.Create(path,
-            [
-                @"<11>1 warning C:\Users\alice\AppData\log token=hidden",
-            ]);
+            DiagnosticsBundle.Create(path, issues);
             using var archive = ZipFile.OpenRead(path);
             Assert.Equal(["diagnostics.json", "recent-issues.log"], archive.Entries.Select(entry => entry.FullName));
             using (var metadata = JsonDocument.Parse(archive.GetEntry("diagnostics.json")!.Open()))
@@ -47,6 +65,7 @@ public class DiagnosticsBundleTests
             }
             using var reader = new StreamReader(archive.GetEntry("recent-issues.log")!.Open(), Encoding.UTF8);
             var log = reader.ReadToEnd();
+            Assert.Equal(DiagnosticsBundle.Preview(issues), log);
             Assert.Contains("%USERPROFILE%", log);
             Assert.DoesNotContain("hidden", log);
             Assert.DoesNotContain("settings.json", archive.Entries.Select(entry => entry.FullName));

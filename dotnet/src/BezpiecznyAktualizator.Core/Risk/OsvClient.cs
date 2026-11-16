@@ -69,6 +69,10 @@ public static class OsvClient
         {
             throw;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
             throw new RiskException(L.F("Nie udało się sprawdzić repozytorium {0} w OSV: {1}", key, ex.Message), ex);

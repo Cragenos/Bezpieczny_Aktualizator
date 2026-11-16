@@ -44,7 +44,7 @@ public static partial class CatalogClient
                 throw new CatalogException(L.F("Odpowiedź z {0} nie pochodzi z połączenia HTTPS.", url));
             return await response.Content.ReadAsStringAsync(ct);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when ((ex is HttpRequestException or TaskCanceledException) && !ct.IsCancellationRequested)
         {
             throw new CatalogException(L.F("Nie udało się pobrać danych z {0}: {1}", url, ex.Message), ex);
         }

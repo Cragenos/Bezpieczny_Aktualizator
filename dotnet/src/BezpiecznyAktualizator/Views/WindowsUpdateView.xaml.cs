@@ -26,7 +26,8 @@ public partial class WindowsUpdateView : UserControl
     public WindowsUpdateView()
     {
         InitializeComponent();
-        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.WindowsUpdate);
+        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.WindowsUpdate,
+            cancelButton: CancelOperationButton);
         SetItems([]);
         L.LanguageChanged += Refresh;
     }
@@ -116,17 +117,25 @@ public partial class WindowsUpdateView : UserControl
 
     private async void Search_Click(object sender, RoutedEventArgs e) => await SearchAsync(interactive: true);
 
+    private void CancelOperation_Click(object sender, RoutedEventArgs e) => _runner.CancelCurrentOperation();
+
     private async Task SearchAsync(bool interactive)
     {
         if (!CanStart()) return;
         WindowsUpdateSearchResult? result = null;
-        var ok = await _runner.RunWithProgressAsync(LogEvent.WindowsUpdate, L.T("Wyszukiwanie aktualizacji Windows..."),
-            async progress =>
+        var ok = await _runner.RunCancellableAsync(LogEvent.WindowsUpdate, L.T("Wyszukiwanie aktualizacji Windows..."),
+            async ct =>
             {
-                progress.Report(L.T("Odczytywanie listy aktualizacji z usługi Windows Update..."));
-                result = await Task.Run(WindowsUpdateAgent.Search);
-                progress.Report(L.T("Pobieranie metadanych CVE z MSRC..."));
-                var warnings = await MsrcWindowsUpdateClient.EnrichAsync(result.Updates);
+                var searchStatus = L.T("Odczytywanie listy aktualizacji z usługi Windows Update...");
+                _runner.SetStatus(searchStatus);
+                _runner.Log(searchStatus);
+                result = await Task.Run(() => WindowsUpdateAgent.SearchAsync(ct), ct);
+                ct.ThrowIfCancellationRequested();
+                var msrcStatus = L.T("Pobieranie metadanych CVE z MSRC...");
+                _runner.SetStatus(msrcStatus);
+                _runner.Log(msrcStatus);
+                var warnings = await MsrcWindowsUpdateClient.EnrichAsync(result.Updates, ct);
+                ct.ThrowIfCancellationRequested();
                 if (warnings.Count > 0)
                     result = result with { Warnings = result.Warnings.Concat(warnings).ToList() };
             }, typeof(WindowsUpdateException));

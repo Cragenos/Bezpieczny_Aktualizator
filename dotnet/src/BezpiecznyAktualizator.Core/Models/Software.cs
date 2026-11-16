@@ -118,6 +118,8 @@ public sealed partial class Software
 
     public static string NormalizeName(string name) => NonAlnum().Replace(name.ToLowerInvariant(), "");
 
+    internal Software CopyForUpdateCheck() => (Software)MemberwiseClone();
+
     [GeneratedRegex("[^0-9a-z]+")]
     private static partial Regex NonAlnum();
 }

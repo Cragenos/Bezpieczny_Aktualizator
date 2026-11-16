@@ -68,8 +68,8 @@
                                        VerticalAlignment="Center" Margin="8,0,0,0" />
                         </WrapPanel>
                         <CheckBox x:Name="NoScanBox" Margin="0,8,0,0"
-                                  Content="{l:Tr 'Instaluj także wtedy, gdy Microsoft Defender jest niedostępny (bez skanowania antywirusowego)'}"
-                                  ToolTip="{l:Tr 'Domyślnie pakiety, których instalator nie mógł zostać przeskanowany programem Microsoft Defender (np. gdy działa inny antywirus), są pomijane.'}" />
+                                  Content="{l:Tr 'Instaluj także, gdy nie ma aktywnego zaufanego skanera (bez skanowania antywirusowego)'}"
+                                  ToolTip="{l:Tr 'Domyślnie pomijane są pakiety, których instalatora nie przeskanował Defender ani aktywny ESET z prawidłowym podpisem.'}" />
 
                         <TextBlock Text="{l:Tr 'Sterowniki'}" FontWeight="SemiBold" Margin="0,14,0,6" />
                         <CheckBox x:Name="DriversCheckBox" Click="Mode_Click"

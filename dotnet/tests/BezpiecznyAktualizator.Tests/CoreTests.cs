@@ -62,6 +62,36 @@ public class WingetParsingTests
     }
 
     [Fact]
+    public async Task InstalledVersionIsReadOnlyForExactPackageId()
+    {
+        IReadOnlyList<string>? received = null;
+        WingetClient.CommandRunner run = (args, _) =>
+        {
+            received = args;
+            return Task.FromResult((0, ListOutput));
+        };
+
+        Assert.Equal("26.05", await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", run));
+        Assert.Equal(["list", "--id", "7zip.7zip", "--exact", "--source", "winget",
+            "--accept-source-agreements", "--disable-interactivity"], received);
+    }
+
+    [Fact]
+    public async Task InstalledVersionIsNotConfirmedWhenMissingUnknownOrAmbiguous()
+    {
+        WingetClient.CommandRunner missing = (_, _) =>
+            Task.FromResult((0, "No installed package found matching input criteria."));
+        WingetClient.CommandRunner unknown = (_, _) =>
+            Task.FromResult((0, ListOutput.Replace("26.05                 winget", "Unknown               winget", StringComparison.Ordinal)));
+        WingetClient.CommandRunner ambiguous = (_, _) =>
+            Task.FromResult((0, ListOutput + ListOutput));
+
+        Assert.Null(await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", missing));
+        Assert.Null(await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", unknown));
+        Assert.Null(await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", ambiguous));
+    }
+
+    [Fact]
     public void ParseShow()
     {
         var info = WingetClient.ParseShow(ShowOutput);

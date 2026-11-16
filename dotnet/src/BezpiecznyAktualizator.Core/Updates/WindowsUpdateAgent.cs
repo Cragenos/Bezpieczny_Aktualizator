@@ -217,14 +217,33 @@ public static class WindowsUpdateAgent
     }
 
     public static WindowsUpdateSearchResult Search()
+        => SearchAsync().GetAwaiter().GetResult();
+
+    public static async Task<WindowsUpdateSearchResult> SearchAsync(CancellationToken ct = default)
     {
         try
         {
-            var result = SearchRaw((object)WindowsUpdateInterop.CreateSession());
+            ct.ThrowIfCancellationRequested();
+            dynamic session = WindowsUpdateInterop.CreateSession();
+            dynamic searcher = session.CreateUpdateSearcher();
+            searcher.Online = true;
+            dynamic result = await WindowsUpdateInterop.SearchAsync((object)searcher, Criteria, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            var code = (int)result.ResultCode;
+            if (code is not (2 or 3))
+                throw new WindowsUpdateException(L.F("Windows Update nie zakończył wyszukiwania (kod {0}).", code));
             var updates = result.Updates;
             var list = new List<WindowsUpdateItem>();
-            for (var i = 0; i < (int)updates.Count; i++) list.Add(ToItem((object)updates.Item[i]));
+            for (var i = 0; i < (int)updates.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                list.Add(ToItem((object)updates.Item[i]));
+            }
             return new WindowsUpdateSearchResult(list, SearchWarnings((object)result));
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (COMException ex)
         {

@@ -61,11 +61,13 @@ internal static partial class DiagnosticsBundle
     internal static string Redact(string value)
     {
         var redacted = UserProfilePath().Replace(value, "%USERPROFILE%");
-        redacted = Url().Replace(redacted, "$1/[REDACTED]");
+        redacted = Url().Replace(redacted, "$1$2/[REDACTED]");
         redacted = Credential().Replace(redacted, "$1=[REDACTED]");
         redacted = Authorization().Replace(redacted, "$1=[REDACTED]");
         return redacted.Length <= MaximumIssueLength ? redacted : redacted[..MaximumIssueLength];
     }
+
+    internal static string Preview(IReadOnlyList<string> issues) => BuildRecentIssues(issues);
 
     private static string BuildRecentIssues(IReadOnlyList<string> issues)
     {
@@ -94,7 +96,7 @@ internal static partial class DiagnosticsBundle
         public DateTimeOffset GeneratedAtUtc { get; init; }
     }
 
-    [GeneratedRegex(@"(?i)\b(https?://[^/\s?#]+)(?:/[^\s?#]*)?(?:[?#][^\s]*)?")]
+    [GeneratedRegex(@"(?i)\b(https?://)(?:[^/@\s?#]*@)?([^/\s?#]+)(?:/[^\s?#]*)?(?:[?#][^\s]*)?")]
     private static partial Regex Url();
 
     [GeneratedRegex(@"(?i)\b(api[-_ ]?key|access[-_ ]?token|token|password|secret)\b\s*[:=]\s*([^\s,;]+)")]

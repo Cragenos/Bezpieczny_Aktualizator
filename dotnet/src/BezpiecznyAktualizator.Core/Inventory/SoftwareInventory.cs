@@ -11,7 +11,7 @@ public static class SoftwareInventory
     private static readonly HashSet<string> SkippedReleaseTypes =
         new(StringComparer.OrdinalIgnoreCase) { "update", "hotfix", "security update", "service pack" };
 
-    public static List<Software> ScanInstalled()
+    public static List<Software> ScanInstalled(CancellationToken ct = default)
     {
         var result = new Dictionary<(string, string), Software>();
         var views = new (RegistryHive Hive, RegistryView View, string Label)[]
@@ -22,11 +22,13 @@ public static class SoftwareInventory
         };
         foreach (var (hive, view, label) in views)
         {
+            ct.ThrowIfCancellationRequested();
             using var baseKey = RegistryKey.OpenBaseKey(hive, view);
             using var root = baseKey.OpenSubKey(UninstallPath);
             if (root is null) continue;
             foreach (var subName in root.GetSubKeyNames())
             {
+                ct.ThrowIfCancellationRequested();
                 RegistryKey? key;
                 try { key = root.OpenSubKey(subName); }
                 catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException) { continue; }

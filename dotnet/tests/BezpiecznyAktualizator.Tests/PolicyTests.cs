@@ -74,6 +74,18 @@ public class PolicyTests
     }
 
     [Fact]
+    public void UnavailableMachinePolicyFailsClosed()
+    {
+        var error = @"C:\ProgramData\BezpiecznyAktualizator\policies.json: invalid JSON";
+        var decision = new UpdatePolicies().Evaluate(Make("a", "1", "2", "Wysoki"),
+            automatic: true, Now, machinePolicyError: error);
+
+        Assert.Equal(PolicyVerdict.MachinePolicyUnavailable, decision.Verdict);
+        Assert.False(decision.Allowed);
+        Assert.Contains(error, decision.Reason.ToString());
+    }
+
+    [Fact]
     public void MachinePolicyIsStricterAndManaged()
     {
         var user = new UpdatePolicies

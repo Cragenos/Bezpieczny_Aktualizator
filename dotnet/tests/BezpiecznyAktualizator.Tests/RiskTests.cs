@@ -379,6 +379,10 @@ public class DefenderTests
         Assert.False(noScan.Passed);
         Assert.True(noScan.PassedWithoutScan);
 
+        var skippedScan = new InstallerVerification { Completed = true, ScanSkipped = true };
+        Assert.False(skippedScan.Passed);
+        Assert.True(skippedScan.PassedWithoutScan);
+
         var threat = new InstallerVerification { Completed = true };
         threat.Checks.Add(InstallerVerifier.DefenderCheck(new DefenderScan(DefenderVerdict.Threat, ["EICAR"], "")));
         Assert.False(threat.Passed);
@@ -494,6 +498,16 @@ public class RollbackTests
     [InlineData("22.00", null)]
     public void FindVersionIgnoresTrailingAndLeadingZeros(string wanted, string? expected) =>
         Assert.Equal(expected, UpdateHistory.FindVersion(["24.09", "24.08", "23.01"], wanted));
+
+    [Theory]
+    [InlineData("2.4.0", "2.4", "2.3", true)]
+    [InlineData("2.5.0", "2.4", "2.3", false)]
+    [InlineData("2.4.0", "Unknown", "2.3", true)]
+    [InlineData("2.3.0", "Unknown", "2.3", false)]
+    [InlineData("Unknown", "2.4", "2.3", false)]
+    [InlineData(null, "2.4", "2.3", false)]
+    public void UpgradeSuccessRequiresTheInstalledVersionToMatch(string? installed, string expected, string previous, bool confirmed) =>
+        Assert.Equal(confirmed, UpdateHistory.IsUpgradeVersionConfirmed(installed, expected, previous));
 
     [Fact]
     public void HistoryRoundtripAndRollback()

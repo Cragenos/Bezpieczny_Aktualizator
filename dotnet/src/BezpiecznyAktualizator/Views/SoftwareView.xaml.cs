@@ -31,7 +31,8 @@ public partial class SoftwareView : UserControl
     public SoftwareView()
     {
         InitializeComponent();
-        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.Scan, CanStartWinget);
+        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.Scan,
+            CanStartWinget, CancelOperationButton);
         _view = CreateView();
         L.LanguageChanged += RefreshTable;
     }
@@ -274,24 +275,95 @@ public partial class SoftwareView : UserControl
     // --------------------------------------------------------------- akcje
     private async void Scan_Click(object sender, RoutedEventArgs e) => await ScanAsync();
 
+    private void CancelOperation_Click(object sender, RoutedEventArgs e) => _runner.CancelCurrentOperation();
+
     /// <summary>Skanuje rejestr; zwraca true, jeśli sprawdzenie aktualizacji w repozytoriach zakończyło się sukcesem.</summary>
     private async Task<bool> ScanAsync(bool checkUpdates = true)
     {
         List<Software>? result = null;
-        var ok = await _runner.RunAsync(LogEvent.Scan, L.T("Skanowanie zainstalowanego oprogramowania..."),
-                                        async () => result = await Task.Run(SoftwareInventory.ScanInstalled));
+        var ok = await _runner.RunCancellableAsync(LogEvent.Scan, L.T("Skanowanie zainstalowanego oprogramowania..."),
+            async ct =>
+            {
+                result = await Task.Run(() => SoftwareInventory.ScanInstalled(ct), ct);
+                ct.ThrowIfCancellationRequested();
+            });
         if (!ok || result is null) return false;
-        SetItems(result);
         _runner.Log(L.F("Znaleziono {0} programów w rejestrze.", result.Count));
-        if (!checkUpdates) return false;
-        if (WingetClient.IsAvailable()) return await CheckUpdatesAsync();
+            if (!checkUpdates)
+            {
+                SetItems(result);
+                return false;
+            }
+            if (WingetClient.IsAvailable()) return await CheckUpdatesAsync(result);
+            SetItems(result);
         _runner.Log(L.T("winget nie jest dostępny - sprawdzanie aktualizacji w repozytoriach wyłączone."), SyslogSeverity.Warning);
         return false;
     }
 
     private async void CheckUpdates_Click(object sender, RoutedEventArgs e) => await CheckUpdatesAsync();
 
-    private async Task<bool> CheckUpdatesAsync()
+    private async void Readiness_Click(object sender, RoutedEventArgs e)
+    {
+        var lines = new List<(string Text, SyslogSeverity Severity)>();
+        var ok = await _runner.RunIndependentCancellableAsync(LogEvent.UpdateCheck,
+            L.T("Sprawdzanie gotowości aktualizacji..."), async ct =>
+        {
+            var wingetAvailable = await Task.Run(WingetClient.IsAvailable, ct);
+            ct.ThrowIfCancellationRequested();
+            var wingetStatus = wingetAvailable
+                ? L.T("Dostępny i zweryfikowany")
+                : L.T("Niedostępny lub niezweryfikowany");
+            lines.Add(($"WinGet: {wingetStatus}",
+                wingetAvailable ? SyslogSeverity.Informational : SyslogSeverity.Warning));
+            if (wingetAvailable)
+            {
+                try
+                {
+                    var enabled = await WingetClient.IsLocalManifestFilesEnabledAsync(ct);
+                    var settingStatus = enabled
+                        ? L.T("włączone")
+                        : L.T("wyłączone — instalacje zweryfikowanych pakietów wymagają decyzji administratora");
+                    lines.Add(($"LocalManifestFiles: {settingStatus}",
+                        enabled ? SyslogSeverity.Informational : SyslogSeverity.Warning));
+                }
+                catch (WingetException ex)
+                {
+                    lines.Add((ex.Message, SyslogSeverity.Warning));
+                }
+            }
+
+            var products = await Task.Run(AntivirusInventory.GetRegisteredProducts, ct);
+            ct.ThrowIfCancellationRequested();
+            var defenderActive = products.Any(product =>
+                product.Protection == AntivirusProtectionState.On &&
+                (product.Name.Contains("Microsoft Defender", StringComparison.OrdinalIgnoreCase) ||
+                 product.Name.Contains("Windows Defender", StringComparison.OrdinalIgnoreCase)));
+            var defenderAvailable = defenderActive && DefenderScanner.FindMpCmdRun() is not null;
+            var esetActive = EsetScanner.IsActiveEset(products);
+            var esetAvailable = esetActive && EsetScanner.IsTrustedScannerAvailable();
+            var defenderStatus = defenderAvailable
+                ? L.T("Skaner jest dostępny")
+                : L.T("Skaner jest niedostępny");
+            var esetStatus = esetAvailable
+                ? L.T("Skaner jest dostępny")
+                : L.T("Skaner jest niedostępny");
+            lines.Add(($"Microsoft Defender: {defenderStatus}",
+                defenderAvailable ? SyslogSeverity.Informational : SyslogSeverity.Warning));
+            lines.Add(($"ESET: {esetStatus}",
+                esetAvailable ? SyslogSeverity.Informational : SyslogSeverity.Warning));
+            var antivirusReady = defenderAvailable || esetAvailable;
+            var readinessMessage = antivirusReady
+                ? L.T("Co najmniej jeden zaufany skaner jest gotowy.")
+                : L.T("Brak aktywnego zaufanego skanera; aktualizacja może wymagać zgody na pominięcie skanowania.");
+            lines.Add((readinessMessage,
+                antivirusReady ? SyslogSeverity.Informational : SyslogSeverity.Warning));
+
+            foreach (var line in lines) _runner.Log(line.Text, line.Severity);
+        }, typeof(WingetException), typeof(AntivirusInventoryException));
+        if (ok) Ui.Info(this, L.T("Gotowość aktualizacji"), string.Join(Environment.NewLine, lines.Select(line => line.Text)));
+    }
+
+    private async Task<bool> CheckUpdatesAsync(List<Software>? scannedItems = null)
     {
         if (!WingetClient.IsAvailable())
         {
@@ -301,11 +373,13 @@ public partial class SoftwareView : UserControl
             return false;
         }
         (List<Software> Items, int PackageCount)? result = null;
-        var ok = await _runner.RunAsync(LogEvent.UpdateCheck, L.T("Sprawdzanie aktualizacji w repozytoriach winget / Microsoft Store..."), async () =>
+        var ok = await _runner.RunCancellableAsync(LogEvent.UpdateCheck,
+            L.T("Sprawdzanie aktualizacji w repozytoriach winget / Microsoft Store..."), async ct =>
         {
-            var baseItems = _items.Where(s => s.IsRegistryEntry).ToList();
-            if (baseItems.Count == 0) baseItems = await Task.Run(SoftwareInventory.ScanInstalled);
-            result = await WingetClient.CheckUpdatesAsync(baseItems);
+            var baseItems = scannedItems ?? _items.Where(s => s.IsRegistryEntry).ToList();
+            if (baseItems.Count == 0)
+                baseItems = await Task.Run(() => SoftwareInventory.ScanInstalled(ct), ct);
+            result = await WingetClient.CheckUpdatesAsync(baseItems, ct);
         }, typeof(WingetException));
         if (!ok || result is not { } r) return false;
         SetItems(r.Items);
@@ -327,12 +401,14 @@ public partial class SoftwareView : UserControl
         var selected = RequireSelection();
         if (selected.Count == 0) return;
         var verify = VerifyTls.IsChecked == true;
-        var ok = await _runner.RunAsync(LogEvent.Assess, L.F("Ocena źródeł aktualizacji ({0})...", selected.Count), async () =>
+        var ok = await _runner.RunCancellableAsync(LogEvent.Assess,
+            L.F("Ocena źródeł aktualizacji ({0})...", selected.Count), async ct =>
         {
             foreach (var s in selected)
             {
+                ct.ThrowIfCancellationRequested();
                 _runner.SetStatus(L.F("Ocena źródła: {0}...", s.Name));
-                await SoftwareAssessor.AssessSoftwareAsync(s, verify);
+                await SoftwareAssessor.AssessSoftwareAsync(s, verify, ct);
             }
         }, typeof(WingetException));
         foreach (var s in selected.Where(s => s.SecurityLevel.Length > 0))
@@ -350,15 +426,17 @@ public partial class SoftwareView : UserControl
             return;
         }
         var verify = VerifyTls.IsChecked == true;
-        await _runner.RunAsync(LogEvent.Assess, L.F("Ocena źródeł {0} aktualizacji...", targets.Count), async () =>
+        await _runner.RunCancellableAsync(LogEvent.Assess,
+            L.F("Ocena źródeł {0} aktualizacji...", targets.Count), async ct =>
         {
             for (var i = 0; i < targets.Count; i++)
             {
+                ct.ThrowIfCancellationRequested();
                 var s = targets[i];
                 _runner.SetStatus(L.F("Ocena źródła {0}/{1}: {2}...", i + 1, targets.Count, s.Name));
                 try
                 {
-                    await SoftwareAssessor.AssessSoftwareAsync(s, verify);
+                    await SoftwareAssessor.AssessSoftwareAsync(s, verify, ct);
                 }
                 catch (WingetException ex)
                 {
@@ -403,11 +481,12 @@ public partial class SoftwareView : UserControl
         }
         var groups = targets.GroupBy(RiskKey).ToList();
         var wingetAvailable = WingetClient.IsAvailable();
-        await _runner.RunAsync(LogEvent.Vulnerability,
-            L.F("Sprawdzanie podatności (NVD) i wsparcia (endoflife.date) dla {0} programów...", groups.Count), async () =>
+        var ok = await _runner.RunCancellableAsync(LogEvent.Vulnerability,
+            L.F("Sprawdzanie podatności (NVD) i wsparcia (endoflife.date) dla {0} programów...", groups.Count), async ct =>
         {
             for (var i = 0; i < groups.Count; i++)
             {
+                ct.ThrowIfCancellationRequested();
                 var s = groups[i].First();
                 _runner.SetStatus(L.F("Sprawdzanie {0}/{1}: {2}...", i + 1, groups.Count, s.Name));
                 LifecycleInfo? life = null;
@@ -417,13 +496,13 @@ public partial class SoftwareView : UserControl
                     Func<Task<IReadOnlyDictionary<string, string>?>>? show = wingetAvailable && !string.IsNullOrEmpty(s.WingetId)
                         ? async () =>
                         {
-                            var info = await WingetClient.ShowAsync(s.WingetId!, s.WingetSource);
+                            var info = await WingetClient.ShowAsync(s.WingetId!, s.WingetSource, ct);
                             if (info is not null)
                                 s.Homepage = info.GetValueOrDefault("Homepage") ?? info.GetValueOrDefault("Publisher Url") ?? "";
                             return info;
                         }
                         : null;
-                    (life, product) = await LifecycleClient.CheckAsync(s, show);
+                    (life, product) = await LifecycleClient.CheckAsync(s, show, ct);
                 }
                 catch (Exception ex) when (ex is RiskException or WingetException)
                 {
@@ -432,7 +511,7 @@ public partial class SoftwareView : UserControl
                 VulnerabilityReport report;
                 try
                 {
-                    report = await NvdClient.CheckAsync(s, product?.Cpe);
+                    report = await NvdClient.CheckAsync(s, product?.Cpe, ct);
                 }
                 catch (RiskException ex)
                 {
@@ -446,7 +525,7 @@ public partial class SoftwareView : UserControl
                     report.OsvConfidence = "medium";
                     try
                     {
-                        report.OsvItems = (await OsvClient.CheckGitHubRepositoryAsync(parts[0], parts[1], report.Version)).ToList();
+                        report.OsvItems = (await OsvClient.CheckGitHubRepositoryAsync(parts[0], parts[1], report.Version, ct)).ToList();
                     }
                     catch (Exception ex) when (ex is RiskException or ArgumentException)
                     {
@@ -478,6 +557,7 @@ public partial class SoftwareView : UserControl
                 RefreshTable();
             }
         });
+        if (!ok) return;
         var checkedItems = groups.Select(g => g.First()).ToList();
         var urgent = checkedItems.Count(s => s.IsUrgent);
         var eol = checkedItems.Count(s => s.Lifecycle?.State == LifecycleState.Eol);
@@ -596,6 +676,13 @@ public partial class SoftwareView : UserControl
             Ui.Warn(this, L.T("Brak winget"), L.T("Nie znaleziono programu winget (Windows Package Manager)."));
             return;
         }
+        Settings.LoadPolicies(out var machinePolicyError);
+        if (machinePolicyError is not null)
+        {
+            Ui.Error(this, L.T("Zasady aktualizacji"),
+                L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", machinePolicyError));
+            return;
+        }
         string? version = null;
         var ok = await _runner.RunAsync(LogEvent.Rollback, L.F("Sprawdzanie dostępności wersji {0} {1}...", record.Name, record.FromVersion), async () =>
             version = UpdateHistory.FindVersion(await WingetClient.ListVersionsAsync(record.WingetId, record.Source), record.FromVersion),
@@ -623,6 +710,9 @@ public partial class SoftwareView : UserControl
         {
             ok = await _runner.RunAsync(LogEvent.Rollback, L.F("Przywracanie {0} {1}...", record.Name, version), async () =>
             {
+                Settings.LoadPolicies(out var policyError);
+                if (policyError is not null)
+                    throw new WingetException(L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", policyError));
                 if (verify)
                 {
                     verifiedInstaller = await VerifyInstallerAsync(record.Name, record.WingetId, record.Source, version);
@@ -632,6 +722,9 @@ public partial class SoftwareView : UserControl
                         return;
                     }
                 }
+                Settings.LoadPolicies(out policyError);
+                if (policyError is not null)
+                    throw new WingetException(L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", policyError));
                 _runner.Log(L.F("Przywracanie {0} ({1}) do wersji {2}...", record.Name, record.WingetId, version), SyslogSeverity.Notice, LogEvent.Rollback);
                 code = verifiedInstaller is null
                     ? await WingetClient.InstallVersionAsync(record.WingetId, version, line => UiLog("  " + line), record.Source)
@@ -707,7 +800,13 @@ public partial class SoftwareView : UserControl
             return;
         }
 
-        var policies = Settings.Policies;
+        var policies = Settings.LoadPolicies(out var machinePolicyError);
+        if (machinePolicyError is not null)
+        {
+            Ui.Error(this, L.T("Zasady aktualizacji"),
+                L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", machinePolicyError));
+            return;
+        }
         if (policies.ManualRequireTrusted)
         {
             // Zasada wymaga zaufanego źródła - nieocenione źródła są oceniane przed decyzją.
@@ -764,12 +863,23 @@ public partial class SoftwareView : UserControl
         BottomTabs.SelectedIndex = 1;
 
         var verifyChecksums = VerifyChecksums.IsChecked == true;
-        var results = new List<(Software Item, int Code)>();
+        var results = new List<(Software Item, int Code, bool Confirmed)>();
         var blocked = new List<Software>();
+        var unconfirmed = new List<Software>();
         var ok = await _runner.RunAsync(LogEvent.Upgrade, L.F("Aktualizowanie {0} programów...", targets.Count), async () =>
         {
             foreach (var s in targets)
             {
+                var currentPolicies = Settings.LoadPolicies(out var policyError);
+                if (policyError is not null)
+                    throw new WingetException(L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", policyError));
+                var currentDecision = currentPolicies.Evaluate(s, automatic: false, DateTimeOffset.Now);
+                if (!currentDecision.Allowed)
+                {
+                    _runner.Log(L.F("Pominięto {0}: {1}", s.Name, currentDecision.Reason.ToString()),
+                        SyslogSeverity.Notice, LogEvent.Policy);
+                    continue;
+                }
                 VerifiedInstaller? verifiedInstaller = null;
                 var version = s.AvailableVersion;
                 var sha256 = "";
@@ -786,25 +896,59 @@ public partial class SoftwareView : UserControl
                 }
                 try
                 {
+                    currentPolicies = Settings.LoadPolicies(out policyError);
+                    currentDecision = currentPolicies.Evaluate(s, automatic: false, DateTimeOffset.Now, policyError);
+                    if (currentDecision.Verdict == PolicyVerdict.MachinePolicyUnavailable)
+                        throw new WingetException(currentDecision.Reason.ToString());
+                    if (!currentDecision.Allowed)
+                    {
+                        _runner.Log(L.F("Pominięto {0}: {1}", s.Name, currentDecision.Reason.ToString()),
+                            SyslogSeverity.Notice, LogEvent.Policy);
+                        continue;
+                    }
                     _runner.Log(L.F("Aktualizacja {0} ({1})...", s.Name, s.WingetId), SyslogSeverity.Notice);
                     var code = verifiedInstaller is null
                         ? await WingetClient.UpgradeAsync(s.WingetId!, line => UiLog("  " + line), s.WingetSource, version)
                         : await WingetClient.UpgradeVerifiedAsync(verifiedInstaller, line => UiLog("  " + line));
-                    results.Add((s, code));
+                    var confirmed = false;
                     if (code == 0)
                     {
-                        _runner.Log(L.F("Zaktualizowano {0} ({1}).", s.Name, s.WingetId), SyslogSeverity.Notice);
-                        RecordUpgrade(s, version, sha256, scheduled: false);
+                        string? installed = null;
+                        try
+                        {
+                            installed = await WingetClient.InstalledVersionAsync(s.WingetId!, s.WingetSource);
+                        }
+                        catch (WingetException ex)
+                        {
+                            _runner.Log(L.F("Nie udało się potwierdzić wersji {0}: {1}", s.Name, ex.Message),
+                                SyslogSeverity.Warning, LogEvent.Upgrade);
+                        }
+                        confirmed = UpdateHistory.IsUpgradeVersionConfirmed(installed, version, s.Version);
+                        if (confirmed)
+                        {
+                            _runner.Log(L.F("Zaktualizowano {0} ({1}).", s.Name, s.WingetId), SyslogSeverity.Notice);
+                            RecordUpgrade(s, installed!, sha256, scheduled: false);
+                        }
+                        else
+                        {
+                            unconfirmed.Add(s);
+                            _runner.Log(L.F("Nie udało się potwierdzić wersji {0}: {1}", s.Name, installed ?? version),
+                                SyslogSeverity.Warning, LogEvent.Upgrade);
+                        }
                     }
+                    results.Add((s, code, confirmed));
                 }
                 finally { verifiedInstaller?.Dispose(); }
             }
         }, typeof(WingetException));
         if (!ok) return;
         var failed = results.Where(r => r.Code != 0).ToList();
-        foreach (var (s, code) in failed)
+        foreach (var (s, code, _) in failed)
             _runner.Log(L.F("Niepowodzenie: {0} (kod 0x{1:X8})", s.Name, code), SyslogSeverity.Error, LogEvent.Upgrade);
-        var summary = L.F("Zaktualizowano: {0}", results.Count - failed.Count) + "\n" + L.F("Niepowodzenia: {0}", failed.Count);
+        var summary = L.F("Zaktualizowano: {0}", results.Count(r => r.Confirmed)) + "\n" + L.F("Niepowodzenia: {0}", failed.Count);
+        if (unconfirmed.Count > 0)
+            summary += "\n" + L.F("Niepotwierdzone: {0}", unconfirmed.Count) + "\n" +
+                       string.Join("\n", unconfirmed.Select(item => "  • " + item.Name));
         if (blocked.Count > 0)
             summary += "\n" + L.F("Wstrzymane po weryfikacji plików kontrolnych: {0}", blocked.Count) + "\n" +
                        string.Join("\n", blocked.Select(b => "  • " + b.Name));
@@ -868,13 +1012,19 @@ public partial class SoftwareView : UserControl
         if (result.PassedWithoutScan)
         {
             var antivirusInfo = result.AntivirusInventoryCheck?.Detail?.ToString();
-            var install = Ui.Confirm(this, L.T("Skanowanie Microsoft Defender"),
-                L.F("Microsoft Defender jest niedostępny (np. wyłączony przez inny program antywirusowy), więc instalator {0} nie został przeskanowany przed instalacją.", name) +
+            var scanStatus = result.ScanSkipped
+                ? L.T("Skanowanie antywirusowe pominięto celowo.")
+                : L.F("Microsoft Defender oraz zaufany skaner ESET są niedostępni, więc instalator {0} nie został przeskanowany przed instalacją.", name);
+            var install = Ui.Confirm(this, L.T("Skanowanie antywirusowe"),
+                scanStatus +
                 (antivirusInfo is null ? "" : "\n\n" + antivirusInfo) +
-                "\n\n" + L.T("Pozostałe kontrole zakończyły się pomyślnie. Zainstalować bez skanowania antywirusowego?"), warning: true);
-            _runner.Log(install ? L.F("Użytkownik zezwolił na instalację {0} bez skanowania Microsoft Defender.", name)
-                                : L.F("Użytkownik wstrzymał instalację {0}.", name),
-                        install ? SyslogSeverity.Warning : SyslogSeverity.Notice, LogEvent.Verify);
+                "\n\n" + (result.ScanSkipped
+                    ? L.T("Pozostałe kontrole przeszły pomyślnie, ale instalator nie został przeskanowany. Zainstalować mimo to?")
+                    : L.T("Pozostałe kontrole zakończyły się pomyślnie. Zainstalować bez skanowania antywirusowego?")), warning: true);
+            _runner.Log(install
+                    ? L.F("Użytkownik zezwolił na instalację {0} bez skanowania antywirusowego.", name)
+                    : L.F("Użytkownik wstrzymał instalację {0} bez skanowania antywirusowego.", name),
+                install ? SyslogSeverity.Warning : SyslogSeverity.Notice, LogEvent.Verify);
             if (!install)
             {
                 result.VerifiedInstaller?.Dispose();
@@ -929,23 +1079,25 @@ public partial class SoftwareView : UserControl
         var query = SearchQuery(s.Name);
         var results = new List<CatalogPackage>();
         var errors = new List<string>();
-        var ok = await _runner.RunAsync(LogEvent.Search, L.F("Wyszukiwanie „{0}” w winget, Scoop Main i Chocolatey Community...", query), async () =>
+        var ok = await _runner.RunCancellableAsync(LogEvent.Search,
+            L.F("Wyszukiwanie „{0}” w winget, Scoop Main i Chocolatey Community...", query), async ct =>
         {
             async Task<IEnumerable<CatalogPackage>> Winget()
             {
-                var found = await WingetClient.SearchAsync(query);
+                var found = await WingetClient.SearchAsync(query, ct);
                 return found.Select(p => new CatalogPackage("winget", p.Name, p.Id, p.Version, p.Source,
                     "https://github.com/microsoft/winget-pkgs/search?q=" + Uri.EscapeDataString(p.Id) + "&type=code"));
             }
             var providers = new List<(string Name, Func<Task<IEnumerable<CatalogPackage>>> Search)>();
             if (WingetClient.IsAvailable()) providers.Add(("winget", Winget));
             else errors.Add("winget: " + L.T("nie znaleziono programu."));
-            providers.Add(("Scoop Main", async () => await CatalogClient.SearchScoopAsync(query)));
-            providers.Add(("Chocolatey Community", async () => await CatalogClient.SearchChocolateyAsync(query)));
+            providers.Add(("Scoop Main", async () => await CatalogClient.SearchScoopAsync(query, ct)));
+            providers.Add(("Chocolatey Community", async () => await CatalogClient.SearchChocolateyAsync(query, ct)));
             var tasks = providers.Select(async p =>
             {
                 try
                 {
+                    ct.ThrowIfCancellationRequested();
                     return (p.Name, Found: (await p.Search()).ToList(), Error: (string?)null);
                 }
                 catch (Exception ex) when (ex is CatalogException or WingetException)

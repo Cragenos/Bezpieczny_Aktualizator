@@ -4,6 +4,11 @@ using BezpiecznyAktualizator.Core.Logging;
 
 namespace BezpiecznyAktualizator.Tests;
 
+[CollectionDefinition(nameof(SyslogTests), DisableParallelization = true)]
+public sealed class SyslogTestsCollectionDefinition
+{
+}
+
 /// <summary>Format RFC 5424 i zapis do pliku. Klasa nie działa równolegle z innymi (stan statyczny Syslog).</summary>
 [Collection(nameof(SyslogTests))]
 public partial class SyslogTests

@@ -77,4 +77,105 @@ public class UpdateStateBackupTests
             root.Delete(true);
         }
     }
+
+    [Fact]
+    public void RestoreReplacesBackedUpStateAndPreservesCurrentNvdApiKey()
+    {
+        var root = Directory.CreateTempSubdirectory("ba_backup_restore_test_");
+        try
+        {
+            var data = Directory.CreateDirectory(Path.Combine(root.FullName, "data"));
+            var settingsPath = Path.Combine(root.FullName, "settings.json");
+            var historyPath = Path.Combine(data.FullName, "update-history.json");
+            File.WriteAllText(settingsPath, """{"language":"pl","nvdApiKey":"original-secret"}""");
+            File.WriteAllText(historyPath, """[{"name":"Original"}]""");
+            File.WriteAllText(Path.Combine(data.FullName, "schedule-state.json"), """{"updates":2}""");
+
+            var backup = UpdateStateBackup.Create(Path.Combine(root.FullName, "backups"), settingsPath, data.FullName,
+                DateTimeOffset.Parse("2026-05-01T12:00:00Z"));
+            File.WriteAllText(settingsPath, """{"language":"en","nvdApiKey":"current-secret"}""");
+            File.WriteAllText(historyPath, """[{"name":"Changed"}]""");
+
+            Assert.Equal(["settings.json", "update-history.json", "schedule-state.json"],
+                UpdateStateBackup.GetFileNames(backup.Path));
+            Assert.Equal(3, UpdateStateBackup.Restore(backup.Path, settingsPath, data.FullName).Count);
+
+            using var settings = JsonDocument.Parse(File.ReadAllText(settingsPath));
+            Assert.Equal("pl", settings.RootElement.GetProperty("language").GetString());
+            Assert.Equal("current-secret", settings.RootElement.GetProperty("nvdApiKey").GetString());
+            Assert.Contains("Original", File.ReadAllText(historyPath));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [Fact]
+    public void PartialRestoreFailureRollsBackAlreadyReplacedFiles()
+    {
+        var root = Directory.CreateTempSubdirectory("ba_backup_partial_restore_test_");
+        try
+        {
+            var data = Directory.CreateDirectory(Path.Combine(root.FullName, "data"));
+            var settingsPath = Path.Combine(root.FullName, "settings.json");
+            var historyPath = Path.Combine(data.FullName, "update-history.json");
+            var schedulePath = Path.Combine(data.FullName, "schedule-state.json");
+            File.WriteAllText(settingsPath, """{"language":"pl","nvdApiKey":"backup-key"}""");
+            File.WriteAllText(historyPath, """[{"name":"Backed up"}]""");
+            File.WriteAllText(schedulePath, """{"updates":1}""");
+            var backup = UpdateStateBackup.Create(Path.Combine(root.FullName, "backups"), settingsPath, data.FullName,
+                DateTimeOffset.UtcNow);
+
+            const string currentSettings = """{"language":"en","nvdApiKey":"current-key"}""";
+            const string currentHistory = """[{"name":"Current"}]""";
+            const string currentSchedule = """{"updates":2}""";
+            File.WriteAllText(settingsPath, currentSettings);
+            File.WriteAllText(historyPath, currentHistory);
+            File.WriteAllText(schedulePath, currentSchedule);
+
+            using (new FileStream(schedulePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var error = Record.Exception(() => UpdateStateBackup.Restore(backup.Path, settingsPath, data.FullName));
+                Assert.NotNull(error);
+                Assert.True(error is IOException or UnauthorizedAccessException, error.ToString());
+            }
+
+            Assert.Equal(currentSettings, File.ReadAllText(settingsPath));
+            Assert.Equal(currentHistory, File.ReadAllText(historyPath));
+            Assert.Equal(currentSchedule, File.ReadAllText(schedulePath));
+            Assert.Empty(Directory.GetFiles(root.FullName, "*.tmp", SearchOption.AllDirectories));
+            Assert.Empty(Directory.GetFiles(root.FullName, "*.rollback", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
+
+    [Fact]
+    public void CreatingSafetyCopyDoesNotPruneBackupBeingRestored()
+    {
+        var root = Directory.CreateTempSubdirectory("ba_backup_retention_test_");
+        try
+        {
+            var data = Directory.CreateDirectory(Path.Combine(root.FullName, "data"));
+            var settingsPath = Path.Combine(root.FullName, "settings.json");
+            File.WriteAllText(settingsPath, """{"language":"pl"}""");
+            var backupDirectory = Path.Combine(root.FullName, "backups");
+            var start = DateTimeOffset.Parse("2026-05-01T12:00:00Z");
+            var oldest = UpdateStateBackup.Create(backupDirectory, settingsPath, data.FullName, start);
+            for (var i = 1; i < 10; i++)
+                UpdateStateBackup.Create(backupDirectory, settingsPath, data.FullName, start.AddMinutes(i));
+
+            UpdateStateBackup.Create(backupDirectory, settingsPath, data.FullName, start.AddMinutes(10), oldest.Path);
+
+            Assert.True(File.Exists(oldest.Path));
+            Assert.Equal(10, Directory.GetFiles(backupDirectory, "state-*.zip").Length);
+        }
+        finally
+        {
+            root.Delete(true);
+        }
+    }
 }

@@ -22,7 +22,8 @@ public partial class DriversView : UserControl
     public DriversView()
     {
         InitializeComponent();
-        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.DriverScan);
+        _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.DriverScan,
+            cancelButton: CancelOperationButton);
         _view = CreateView();
         L.LanguageChanged += RefreshTable;
     }
@@ -190,16 +191,18 @@ public partial class DriversView : UserControl
 
     private async void Search_Click(object sender, RoutedEventArgs e) => await SearchUpdatesAsync(interactive: true);
 
+    private void CancelOperation_Click(object sender, RoutedEventArgs e) => _runner.CancelCurrentOperation();
+
     private async Task<int?> SearchUpdatesAsync(bool interactive)
     {
         if (Window.GetWindow(this) is MainWindow main && !main.CanStartWindowsUpdate(this, interactive)) return null;
         List<Driver>? installed = null;
         List<DriverUpdate>? updates = null;
         var current = _items;
-        var ok = await _runner.RunAsync(LogEvent.DriverCheck, L.T("Wyszukiwanie sterowników w Windows Update (może potrwać kilka minut)..."), async () =>
+        var ok = await _runner.RunCancellableAsync(LogEvent.DriverCheck, L.T("Wyszukiwanie sterowników w Windows Update (może potrwać kilka minut)..."), async ct =>
         {
             installed = current.Count > 0 ? current : await Task.Run(DriverInventory.Scan);
-            updates = await Task.Run(WindowsUpdateDrivers.Search);
+            updates = await Task.Run(() => WindowsUpdateDrivers.SearchAsync(ct), ct);
         }, typeof(DriverException));
         if (!ok || installed is null || updates is null) return null;
         _updatesChecked = true;

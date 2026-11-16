@@ -6,6 +6,7 @@
         <WrapPanel x:Name="Toolbar" DockPanel.Dock="Top" Margin="0,0,0,4">
             <Button Style="{StaticResource ToolButton}" Tag="&#xE72C;" Content="{l:Tr 'Skanuj komputer'}" Click="Scan_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE895;" Content="{l:Tr 'Sprawdź aktualizacje'}" Click="CheckUpdates_Click" />
+            <Button Style="{StaticResource ToolButton}" Tag="&#xE9CE;" Content="{l:Tr 'Sprawdź gotowość aktualizacji'}" Click="Readiness_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xEA18;" Content="{l:Tr 'Oceń źródło'}" Click="Assess_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE9D5;" Content="{l:Tr 'Oceń wszystkie aktualizacje'}" Click="AssessAll_Click" />
             <Button x:Name="AntivirusButton" Style="{StaticResource ToolButton}" Tag="&#xE72E;" Content="{l:Tr 'Sprawdź antywirusa'}" Click="Antivirus_Click"
@@ -39,6 +40,8 @@
         </DockPanel>
 
         <DockPanel DockPanel.Dock="Bottom" Margin="2,8,2,0">
+            <Button x:Name="CancelOperationButton" DockPanel.Dock="Right" Content="{l:Tr 'Anuluj'}"
+                    Visibility="Collapsed" IsEnabled="False" Click="CancelOperation_Click" Margin="8,0,0,0" />
             <ProgressBar x:Name="Progress" DockPanel.Dock="Right" Width="220" Visibility="Hidden" VerticalAlignment="Center" />
             <TextBlock x:Name="StatusText" Style="{StaticResource Secondary}" Text="{l:Tr 'Gotowy.'}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
         </DockPanel>

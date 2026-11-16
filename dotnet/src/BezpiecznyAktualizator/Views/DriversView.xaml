@@ -28,6 +28,8 @@
         </DockPanel>
 
         <DockPanel DockPanel.Dock="Bottom" Margin="2,8,2,0">
+            <Button x:Name="CancelOperationButton" DockPanel.Dock="Right" Style="{StaticResource ToolButton}" Tag="&#xE711;"
+                    Content="{l:Tr 'Anuluj'}" Click="CancelOperation_Click" Visibility="Collapsed" IsEnabled="False" />
             <ProgressBar x:Name="Progress" DockPanel.Dock="Right" Width="220" Visibility="Hidden" VerticalAlignment="Center" />
             <TextBlock x:Name="StatusText" Style="{StaticResource Secondary}" Text="{l:Tr 'Gotowy.'}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
         </DockPanel>

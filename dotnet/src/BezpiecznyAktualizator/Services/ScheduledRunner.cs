@@ -1,9 +1,11 @@
 using System.Net.Http;
 using System.Security.Principal;
 using BezpiecznyAktualizator.Core.Drivers;
+using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Inventory;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
+using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Scheduling;
 using BezpiecznyAktualizator.Core.Security;
 using BezpiecznyAktualizator.Core.Updates;
@@ -204,10 +206,18 @@ public static class ScheduledRunner
             Syslog.Warning(LogEvent.Scheduled, L.T("winget nie jest dostępny - sprawdzanie aktualizacji w repozytoriach wyłączone."));
             return;
         }
-        var installed = await Task.Run(SoftwareInventory.ScanInstalled);
+        var installed = await Task.Run(() => SoftwareInventory.ScanInstalled());
         var (items, _) = await WingetClient.CheckUpdatesAsync(installed);
         result.Updates = items.Count(s => s.HasUpdate);
-        var policies = Settings.Policies;
+        var policies = Settings.LoadPolicies(out var machinePolicyError);
+        if (install && machinePolicyError is not null)
+        {
+            result.Error = L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", machinePolicyError);
+            result.Skipped.AddRange(items.Where(item => item.CanUpgrade)
+                .Select(item => $"{item.Name} {item.Version} → {item.AvailableVersion}"));
+            Syslog.Error(LogEvent.Policy, result.Error);
+            return;
+        }
         var nowTime = DateTimeOffset.Now;
         var candidates = items.Where(s => SilentUpdatePolicy.IsCandidate(s, policies, nowTime)).ToList();
         Syslog.Info(LogEvent.Scheduled, L.F("Dostępne aktualizacje: {0}; do cichej instalacji kwalifikuje się: {1}.",
@@ -244,6 +254,22 @@ public static class ScheduledRunner
                 Syslog.Notice(LogEvent.Scheduled, L.T("Przerwano, ponieważ użytkownik wrócił do komputera."));
                 return;
             }
+            policies = Settings.LoadPolicies(out machinePolicyError);
+            if (machinePolicyError is not null)
+            {
+                result.Error = L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", machinePolicyError);
+                result.Skipped.AddRange(candidates.SkipWhile(candidate => candidate != s)
+                    .Select(item => $"{item.Name} {item.Version} → {item.AvailableVersion}"));
+                Syslog.Error(LogEvent.Policy, result.Error);
+                return;
+            }
+            var currentDecision = policies.CheckRules(s, DateTimeOffset.Now);
+            if (!currentDecision.Allowed)
+            {
+                result.Skipped.Add($"{s.Name} {s.Version} → {s.AvailableVersion}");
+                Syslog.Notice(LogEvent.Policy, L.F("Pominięto {0}: {1}", s.Name, currentDecision.Reason.ToString()));
+                continue;
+            }
             var label = $"{s.Name} {s.Version} → {s.AvailableVersion}";
             try
             {
@@ -254,11 +280,19 @@ public static class ScheduledRunner
                 s.SecurityLevel = "";
                 Syslog.Warning(LogEvent.Scheduled, L.F("Nie udało się ocenić źródła {0}: {1}", s.Name, ex.Message));
             }
-            if (!policies.TrustAccepted(s.SecurityLevel))
+            policies = Settings.LoadPolicies(out machinePolicyError);
+            if (machinePolicyError is not null)
+            {
+                result.Error = L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", machinePolicyError);
+                result.Skipped.Add(label);
+                Syslog.Error(LogEvent.Policy, result.Error);
+                return;
+            }
+            var postAssessmentDecision = policies.Evaluate(s, automatic: true, DateTimeOffset.Now);
+            if (!postAssessmentDecision.Allowed)
             {
                 result.Skipped.Add(label);
-                Syslog.Warning(LogEvent.Scheduled, L.F("Pominięto {0} - poziom zaufania źródła: {1}.", s.Name,
-                    s.SecurityLevel.Length > 0 ? L.T(s.SecurityLevel) : L.T("nie oceniono")));
+                Syslog.Warning(LogEvent.Policy, L.F("Pominięto {0}: {1}", s.Name, postAssessmentDecision.Reason.ToString()));
                 continue;
             }
 
@@ -271,14 +305,33 @@ public static class ScheduledRunner
                 // Bez użytkownika nie instalujemy niczego, czego nie dało się w pełni zweryfikować i przeskanować.
                 result.Skipped.Add(label);
                 if (verification.PassedWithoutScan)
-                    Syslog.Warning(LogEvent.Scheduled, L.F("Pominięto {0} - Microsoft Defender jest niedostępny, a instalacja bez skanowania antywirusowego nie jest dozwolona w ustawieniach harmonogramu.", s.Name));
+                    Syslog.Warning(LogEvent.Scheduled,
+                        L.F("Pominięto {0} - instalator nie został zeskanowany, a instalacja bez skanowania nie jest dozwolona w ustawieniach harmonogramu.", s.Name));
                 else
                     Syslog.Warning(LogEvent.Scheduled, L.F("Pominięto {0} - instalator nie przeszedł weryfikacji plików kontrolnych{1}.",
                         s.Name, verification.Error is { } err ? ": " + err : ""));
                 continue;
             }
             if (verification.PassedWithoutScan)
-                Syslog.Warning(LogEvent.Scheduled, L.F("Instalacja {0} bez skanowania Microsoft Defender (zgoda w ustawieniach harmonogramu).", s.Name));
+                Syslog.Warning(LogEvent.Scheduled,
+                    L.F("Instalacja {0} bez skanowania antywirusowego (jawnie dozwolona w ustawieniach harmonogramu).", s.Name));
+
+            policies = Settings.LoadPolicies(out machinePolicyError);
+            var beforeInstallDecision = policies.Evaluate(s, automatic: true, DateTimeOffset.Now, machinePolicyError);
+            if (beforeInstallDecision.Verdict == PolicyVerdict.MachinePolicyUnavailable)
+            {
+                result.Error = beforeInstallDecision.Reason.ToString();
+                result.Skipped.AddRange(candidates.SkipWhile(candidate => candidate != s)
+                    .Select(item => $"{item.Name} {item.Version} → {item.AvailableVersion}"));
+                Syslog.Error(LogEvent.Policy, result.Error);
+                return;
+            }
+            if (!beforeInstallDecision.Allowed)
+            {
+                result.Skipped.Add(label);
+                Syslog.Notice(LogEvent.Policy, L.F("Pominięto {0}: {1}", s.Name, beforeInstallDecision.Reason.ToString()));
+                continue;
+            }
 
             if (UserReturned(now))
             {
@@ -312,9 +365,27 @@ public static class ScheduledRunner
             }
             if (code == 0)
             {
-                result.Updated.Add(label);
-                Syslog.Notice(LogEvent.Upgrade, L.F("Zaktualizowano {0} ({1}).", s.Name, s.WingetId));
-                Views.SoftwareView.RecordUpgrade(s, verification.Version, verification.Sha256, scheduled: true);
+                string? confirmedVersion = null;
+                try
+                {
+                    confirmedVersion = await WingetClient.InstalledVersionAsync(s.WingetId!, s.WingetSource);
+                }
+                catch (WingetException ex)
+                {
+                    Syslog.Warning(LogEvent.Upgrade, L.F("Nie udało się potwierdzić wersji {0}: {1}", s.Name, ex.Message));
+                }
+
+                if (UpdateHistory.IsUpgradeVersionConfirmed(confirmedVersion, verification.Version, s.Version))
+                {
+                    result.Updated.Add(label);
+                    Syslog.Notice(LogEvent.Upgrade, L.F("Zaktualizowano {0} ({1}).", s.Name, s.WingetId));
+                    Views.SoftwareView.RecordUpgrade(s, confirmedVersion!, verification.Sha256, scheduled: true);
+                }
+                else
+                {
+                    result.Failed.Add(label);
+                    Syslog.Warning(LogEvent.Upgrade, L.F("Nie udało się potwierdzić wersji {0}: {1}", s.Name, confirmedVersion ?? verification.Version));
+                }
             }
             else
             {

@@ -271,18 +271,21 @@ public partial class MainWindow : Window
                 warning: true))
             return;
 
-        var dialog = new SaveFileDialog
-        {
-            Title = L.T("Zapisz pakiet diagnostyczny"),
-            FileName = "BezpiecznyAktualizator-diagnostics.zip",
-            DefaultExt = ".zip",
-            AddExtension = true,
-            Filter = "ZIP (*.zip)|*.zip",
-        };
-        if (dialog.ShowDialog(this) != true) return;
         try
         {
-            var path = DiagnosticsBundle.Create(dialog.FileName, Syslog.ReadRecentIssues());
+            var recentIssues = Syslog.ReadRecentIssues();
+            var preview = new Views.DiagnosticsPreviewWindow(DiagnosticsBundle.Preview(recentIssues)) { Owner = this };
+            if (preview.ShowDialog() != true) return;
+            var dialog = new SaveFileDialog
+            {
+                Title = L.T("Zapisz pakiet diagnostyczny"),
+                FileName = "BezpiecznyAktualizator-diagnostics.zip",
+                DefaultExt = ".zip",
+                AddExtension = true,
+                Filter = "ZIP (*.zip)|*.zip",
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            var path = DiagnosticsBundle.Create(dialog.FileName, recentIssues);
             Syslog.Info(LogEvent.Report, L.F("Zapisano pakiet diagnostyczny: {0}", path));
             Ui.Info(this, L.T("Pakiet diagnostyczny"), L.F("Zapisano pakiet diagnostyczny: {0}", path));
         }
@@ -291,6 +294,54 @@ public partial class MainWindow : Window
         {
             Syslog.Error(LogEvent.Report, L.T("Nie udało się utworzyć pakietu diagnostycznego."), ex);
             Ui.Error(this, L.T("Błąd"), L.F("Nie udało się utworzyć pakietu diagnostycznego: {0}", ex.Message));
+        }
+    }
+
+    private void RestoreSettings_Click(object sender, RoutedEventArgs e)
+    {
+        var localData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BezpiecznyAktualizator");
+        var backupDirectory = Path.Combine(localData, "Backups");
+        var dialog = new OpenFileDialog
+        {
+            Title = L.T("Przywracanie kopii ustawień"),
+            InitialDirectory = Directory.Exists(backupDirectory) ? backupDirectory : Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            Filter = "ZIP (*.zip)|*.zip",
+            FileName = "state-",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            var files = UpdateStateBackup.GetFileNames(dialog.FileName);
+            if (files.Count == 0)
+            {
+                Ui.Warn(this, L.T("Przywracanie kopii ustawień"), L.T("Kopia nie zawiera plików do przywrócenia."));
+                return;
+            }
+            if (!Ui.Confirm(this, L.T("Przywracanie kopii ustawień"),
+                    L.F("Kopia została zweryfikowana i zawiera: {0}. Bieżący klucz NVD API zostanie zachowany. Najpierw zostanie utworzona kopia obecnego stanu. Po przywróceniu może być wymagane ponowne uruchomienie aplikacji.",
+                        string.Join(", ", files)), warning: true))
+                return;
+
+            var settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "BezpiecznyAktualizator", "settings.json");
+            var safetyCopy = UpdateStateBackup.Create(backupDirectory, settingsPath, localData, DateTimeOffset.UtcNow,
+                protectedBackup: dialog.FileName);
+            if (!UpdateStateBackup.Verify(safetyCopy.Path))
+                throw new InvalidDataException("Current updater state backup failed verification.");
+            var restored = UpdateStateBackup.Restore(dialog.FileName, settingsPath, localData);
+            Syslog.Notice(LogEvent.Settings, L.F("Przywrócono kopię ustawień i historii: {0}.", string.Join(", ", restored)));
+            Ui.Info(this, L.T("Przywracanie kopii ustawień"),
+                L.F("Przywrócono: {0}. Ponownie uruchom aplikację, aby wszystkie ustawienia zostały wczytane.", string.Join(", ", restored)));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or
+                                       System.Security.SecurityException or System.Text.Json.JsonException or ArgumentException or
+                                       InvalidOperationException)
+        {
+            Syslog.Error(LogEvent.Settings, L.F("Nie udało się przywrócić kopii ustawień: {0}", ex.Message), ex);
+            Ui.Error(this, L.T("Błąd"), L.F("Nie udało się przywrócić kopii ustawień: {0}", ex.Message));
         }
     }
 

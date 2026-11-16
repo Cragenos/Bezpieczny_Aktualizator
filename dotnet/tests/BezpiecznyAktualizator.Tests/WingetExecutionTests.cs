@@ -1,4 +1,5 @@
 using BezpiecznyAktualizator.Core.Logging;
+using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Winget;
 
 namespace BezpiecznyAktualizator.Tests;
@@ -146,6 +147,72 @@ public sealed class WingetExecutionTests : IDisposable
     }
 
     [Fact]
+    public async Task CommandGateIsSharedWithOtherProcessHandles()
+    {
+        await WingetClient.WithCommandGateAsync(() => Task.FromResult(0), CancellationToken.None);
+        using var otherProcessGate = Mutex.OpenExisting(WingetClient.ProcessCommandGateName);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = WingetClient.WithCommandGateAsync(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return 0;
+        }, CancellationToken.None);
+
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var wasAvailableWhileHeld = otherProcessGate.WaitOne(0);
+        if (wasAvailableWhileHeld) otherProcessGate.ReleaseMutex();
+        release.SetResult();
+        await operation;
+        Assert.False(wasAvailableWhileHeld);
+        Assert.True(otherProcessGate.WaitOne(TimeSpan.FromSeconds(1)));
+        otherProcessGate.ReleaseMutex();
+    }
+
+    [Fact]
+    public async Task CancelledUpdateCheckPreservesTheExistingSoftwareState()
+    {
+        var software = new Software
+        {
+            Name = "Example App", Version = "1.0", WingetDetected = true, WingetId = "Example.App",
+            WingetSource = "winget", AvailableVersion = "2.0",
+        };
+        using var cts = new CancellationTokenSource();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => WingetClient.CheckUpdatesCoreAsync(
+            [software],
+            _ => Task.FromResult(new List<WingetPackage> { new("Example App", "Example.App", "1.0", "", "winget") }),
+            _ =>
+            {
+                cts.Cancel();
+                return Task.FromResult(new List<WingetPackage> { new("Example App", "Example.App", "1.0", "3.0", "winget") });
+            },
+            cts.Token));
+
+        Assert.True(software.WingetDetected);
+        Assert.Equal("Example.App", software.WingetId);
+        Assert.Equal("winget", software.WingetSource);
+        Assert.Equal("2.0", software.AvailableVersion);
+    }
+
+    [Fact]
+    public async Task SuccessfulUpdateCheckReturnsUpdatedCopies()
+    {
+        var software = new Software { Name = "Example App", Version = "1.0", Origin = "HKLM" };
+        var (items, count) = await WingetClient.CheckUpdatesCoreAsync(
+            [software],
+            _ => Task.FromResult(new List<WingetPackage> { new("Example App", "Example.App", "1.0", "", "winget") }),
+            _ => Task.FromResult(new List<WingetPackage> { new("Example App", "Example.App", "1.0", "2.0", "winget") }));
+
+        Assert.Equal(1, count);
+        Assert.True(items.Single().CanUpgrade);
+        Assert.False(software.WingetDetected);
+        Assert.Null(software.WingetId);
+        Assert.Empty(software.AvailableVersion);
+    }
+
+    [Fact]
     public async Task AcceptsExplicitlyEnabledLocalManifestsWithoutChangingSettings()
     {
         await WingetClient.EnsureLocalManifestFilesEnabledCoreAsync((args, _) =>
@@ -153,6 +220,20 @@ public sealed class WingetExecutionTests : IDisposable
             Assert.Equal(["settings", "export", "--disable-interactivity"], args);
             return Task.FromResult((0, """{"adminSettings":{"LocalManifestFiles":true}}"""));
         });
+    }
+
+    [Theory]
+    [InlineData(true, """{"adminSettings":{"LocalManifestFiles":true}}""")]
+    [InlineData(false, """{"adminSettings":{"LocalManifestFiles":false}}""")]
+    public async Task ReportsLocalManifestSettingWithoutChangingIt(bool expected, string output)
+    {
+        var enabled = await WingetClient.IsLocalManifestFilesEnabledCoreAsync((args, _) =>
+        {
+            Assert.Equal(["settings", "export", "--disable-interactivity"], args);
+            return Task.FromResult((0, output));
+        });
+
+        Assert.Equal(expected, enabled);
     }
 
     [Theory]
