@@ -183,4 +183,30 @@ public class AntivirusInventoryTests
             File.Delete(path);
         }
     }
+
+    [Theory]
+    [InlineData(0, AmsiVerdict.Clean)]
+    [InlineData(1, AmsiVerdict.Clean)]
+    [InlineData(16384, AmsiVerdict.Threat)]
+    [InlineData(20479, AmsiVerdict.Threat)]
+    [InlineData(20480, AmsiVerdict.Clean)]
+    [InlineData(32768, AmsiVerdict.Threat)]
+    public void AmsiResultIsClassified(int result, AmsiVerdict expected) =>
+        Assert.Equal(expected, AmsiScanner.Classify(result, "ESET Security").Verdict);
+
+    [Fact]
+    public void AmsiProviderIsTrustedOnlyForMatchingActiveProduct()
+    {
+        AntivirusProduct eset = new("ESET Security", AntivirusProtectionState.On, AntivirusSignatureStatus.UpToDate);
+        AntivirusProduct defender = new("Windows Defender", AntivirusProtectionState.On, AntivirusSignatureStatus.UpToDate);
+        AmsiProvider Provider(SignatureState state, string signer) => new(Guid.NewGuid(), @"C:\x.dll", new(state, 0, signer));
+
+        Assert.Equal(eset, AmsiScanner.MatchProduct(Provider(SignatureState.Valid, "ESET, spol. s r.o."), [defender, eset]));
+        Assert.Equal(defender, AmsiScanner.MatchProduct(
+            Provider(SignatureState.Valid, "Microsoft Windows Publisher"), [eset, defender]));
+        Assert.Null(AmsiScanner.MatchProduct(Provider(SignatureState.Unsigned, "ESET, spol. s r.o."), [eset]));
+        Assert.Null(AmsiScanner.MatchProduct(Provider(SignatureState.Valid, "Other Security Ltd"), [eset]));
+        Assert.Null(AmsiScanner.MatchProduct(Provider(SignatureState.Valid, "ESET, spol. s r.o."),
+            [eset with { Protection = AntivirusProtectionState.Off }]));
+    }
 }

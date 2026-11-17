@@ -1,9 +1,12 @@
 using System.Xml.Linq;
+using BezpiecznyAktualizator.Core.Localization;
+using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Scheduling;
 using BezpiecznyAktualizator.Core.Security;
 using BezpiecznyAktualizator.Core.Updates;
+using BezpiecznyAktualizator.Services;
 
 namespace BezpiecznyAktualizator.Tests;
 
@@ -76,6 +79,49 @@ public class ScheduleTests
     }
 
     [Fact]
+    public void InstallationConstraintsAreCheckedConservativelyAtInstallTime()
+    {
+        var options = new ScheduleOptions
+        {
+            WindowStart = "08:00",
+            WindowEnd = "17:00",
+            SkipOnBattery = true,
+            SkipOnMeteredNetwork = true,
+        }.Normalize();
+
+        var outsideWindow = ScheduledRunner.GetInstallationConstraintSkip(
+            options, DateTimeOffset.Parse("2026-05-01T18:00:00"),
+            () => throw new InvalidOperationException("Power status should not be read outside the window."),
+            () => throw new InvalidOperationException("Network status should not be read outside the window."));
+        Assert.NotNull(outsideWindow);
+
+        var onBattery = ScheduledRunner.GetInstallationConstraintSkip(
+            options, DateTimeOffset.Parse("2026-05-01T12:00:00"), () => false,
+            () => throw new InvalidOperationException("Network status is unnecessary when on battery."));
+        Assert.NotNull(onBattery);
+
+        var metered = ScheduledRunner.GetInstallationConstraintSkip(
+            options, DateTimeOffset.Parse("2026-05-01T12:00:00"), () => true,
+            () => MeteredNetworkState.Unknown);
+        Assert.NotNull(metered);
+
+        var allowed = ScheduledRunner.GetInstallationConstraintSkip(
+            options, DateTimeOffset.Parse("2026-05-01T12:00:00"), () => true,
+            () => MeteredNetworkState.Unmetered);
+        Assert.Null(allowed);
+    }
+
+    [Fact]
+    public void ScheduledTaskExitCodeIncludesWindowsUpdateDriverAndPackageFailures()
+    {
+        Assert.Equal(0, ScheduledRunner.GetExitCode(new ScheduleState()));
+        Assert.Equal(1, ScheduledRunner.GetExitCode(new ScheduleState { WindowsUpdateError = "WUA failed" }));
+        Assert.Equal(1, ScheduledRunner.GetExitCode(new ScheduleState { DriverError = "Driver scan failed" }));
+        Assert.Equal(1, ScheduledRunner.GetExitCode(new ScheduleState { Failed = ["package"] }));
+        Assert.Equal(1, ScheduledRunner.GetExitCode(new ScheduleState { Error = "Unexpected failure" }));
+    }
+
+    [Fact]
     public void RetryDelayUsesBoundedLinearBackoff()
     {
         Assert.Equal(TimeSpan.FromSeconds(30), ScheduleOptions.RetryDelay(1));
@@ -131,12 +177,29 @@ public class ScheduleTests
     }
 
     [Fact]
+    public void SkipDuringRunKeepsRunResultsInSummary()
+    {
+        var started = new DateTimeOffset(2026, 5, 1, 3, 15, 0, TimeSpan.Zero);
+        var state = new ScheduleState
+        {
+            LastRun = started, LastAttempt = started, Installed = true, Updates = 2, Updated = ["A 1 → 2"],
+            Skipped = ["B 1 → 2"], SkipReason = "brak punktu", WindowsUpdateError = "wu-fail",
+        };
+        var summary = state.Summary();
+        Assert.Contains("brak punktu", summary);
+        Assert.Contains("wu-fail", summary);
+        Assert.DoesNotContain(L.T("Ostatnia próba cichego sprawdzania: {0}. Pominięto: {1}").Split('{')[0], summary);
+    }
+
+    [Fact]
     public void StateRoundTripsThroughFile()
     {
         var original = ScheduleState.FilePath;
+        var originalLogDirectory = Syslog.Directory;
         var dir = Directory.CreateTempSubdirectory("ba_schedule_test_");
         try
         {
+            Syslog.Configure(dir.FullName);
             ScheduleState.FilePath = Path.Combine(dir.FullName, "state.json");
             Assert.Null(ScheduleState.Load().LastRun);
             var run = new DateTimeOffset(2026, 5, 1, 3, 15, 0, TimeSpan.FromHours(2));
@@ -144,6 +207,7 @@ public class ScheduleTests
             {
                 LastRun = run, Installed = true, Updates = 3, Updated = ["A 1 → 2"], Skipped = ["B"], DriverUpdates = 1, Interrupted = true,
             }.Save();
+            Assert.Empty(Directory.GetFiles(dir.FullName, "state.json.*.tmp"));
             var loaded = ScheduleState.Load();
             Assert.Equal(run, loaded.LastRun);
             Assert.True(loaded.Installed);
@@ -155,11 +219,19 @@ public class ScheduleTests
             Assert.Contains("3", loaded.Summary());
 
             File.WriteAllText(ScheduleState.FilePath, "{ uszkodzony");
-            Assert.Null(ScheduleState.Load().LastRun);
+            var recovered = ScheduleState.Load();
+            Assert.Empty(recovered.LoadError);
+            Assert.Null(recovered.LastRun);
+            Assert.False(File.Exists(ScheduleState.FilePath));
+            var corrupt = Assert.Single(Directory.GetFiles(dir.FullName, "state.json.corrupt-*"));
+            Assert.Equal("{ uszkodzony", File.ReadAllText(corrupt));
+            recovered.Save();
+            Assert.True(File.Exists(ScheduleState.FilePath));
         }
         finally
         {
             ScheduleState.FilePath = original;
+            Syslog.Configure(originalLogDirectory);
             dir.Delete(true);
         }
     }

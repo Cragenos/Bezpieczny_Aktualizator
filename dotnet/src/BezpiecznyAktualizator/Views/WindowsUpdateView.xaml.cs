@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.Updates;
@@ -219,18 +220,14 @@ public partial class WindowsUpdateView : UserControl
 
     private static async Task<int> StartElevatedAsync(WindowsUpdateAction action, IReadOnlyList<WindowsUpdateIdentity> ids)
     {
-        var executable = Environment.ProcessPath ?? throw new WindowsUpdateException(L.T("Nieznana ścieżka programu."));
-        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-        {
-            var assembly = Assembly.GetEntryAssembly()?.Location;
-            var appHost = string.IsNullOrEmpty(assembly) ? "" : Path.ChangeExtension(assembly, ".exe");
-            if (!File.Exists(appHost)) throw new WindowsUpdateException(L.T("Nie znaleziono pliku wykonywalnego programu."));
-            executable = appHost;
-        }
+        var executable = InstallBackup.SelfExecutable() ??
+                         throw new WindowsUpdateException(L.T("Nie znaleziono pliku wykonywalnego programu."));
         var start = new ProcessStartInfo(executable) { UseShellExecute = true, Verb = "runas" };
         start.ArgumentList.Add(WindowsUpdateAgent.OperationArgument);
         start.ArgumentList.Add(action == WindowsUpdateAction.Download ? "download" : "install");
         start.ArgumentList.Add(WindowsUpdateAgent.SerializeSelection(ids));
+        if (action == WindowsUpdateAction.Install && Settings.BackupBeforeInstall)
+            start.ArgumentList.Add(SystemRestorePoint.CreateArgument);
         try
         {
             using var process = Process.Start(start) ?? throw new WindowsUpdateException(L.T("Nie udało się uruchomić instalatora."));
@@ -256,9 +253,16 @@ public partial class WindowsUpdateView : UserControl
                 L.F("Uruchomić instalator Windows Update dla pliku:\n{0}\n\nWybierz tylko plik pobrany z oficjalnego Katalogu Microsoft Update. Instalator systemowy sprawdzi pakiet i może wymagać ponownego uruchomienia.", dialog.FileName),
                 warning: true)) return;
         var exitCode = -1;
+        var started = false;
         var ok = await _runner.RunAsync(LogEvent.WindowsUpdate, L.T("Instalacja pliku MSU"),
-            async () => exitCode = await StartStandaloneAsync(dialog.FileName), typeof(WindowsUpdateException));
-        if (!ok) return;
+            async () =>
+            {
+                if (!await ScanDownloadedFileAsync(dialog.FileName)) return;
+                if (!await InstallBackup.EnsureAsync(this, RestorePointPurpose.WindowsUpdate, _runner.Log)) return;
+                started = true;
+                exitCode = await StartStandaloneAsync(dialog.FileName);
+            }, typeof(WindowsUpdateException));
+        if (!ok || !started) return;
         var status = WindowsUpdateStandalone.ClassifyExitCode(exitCode);
         var message = status switch
         {
@@ -281,6 +285,8 @@ public partial class WindowsUpdateView : UserControl
         if (status is StandaloneUpdateStatus.Succeeded or StandaloneUpdateStatus.RestartRequired)
             await SearchAsync(interactive: false);
     }
+
+    private Task<bool> ScanDownloadedFileAsync(string file) => DownloadScan.ScanAsync(this, file, _runner.Log);
 
     private static async Task<int> StartStandaloneAsync(string file)
     {

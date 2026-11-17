@@ -1,10 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Management;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Updates;
 
@@ -220,7 +220,13 @@ public static partial class WindowsUpdateDrivers
             var ids = File.ReadAllLines(job.IdsFile).Select(l => l.Trim()).Where(IsValidUpdateId)
                           .ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (File.Exists(job.OptionsFile) && File.ReadAllText(job.OptionsFile).Contains("restore-point"))
-                CreateRestorePoint(Log);
+            {
+                Log(L.T("Tworzenie punktu przywracania systemu..."));
+                var backup = SystemRestorePoint.Create(RestorePointPurpose.Drivers);
+                Log(backup.Detail);
+                if (!backup.Succeeded)
+                    throw new DriverException(L.T("Instalację wstrzymano, ponieważ nie utworzono punktu przywracania. Wyłącz opcję punktu przywracania, aby zainstalować bez kopii bezpieczeństwa."));
+            }
 
             var session = CreateSession();
             Log(L.T("Wyszukiwanie wybranych sterowników w Windows Update..."));
@@ -278,27 +284,6 @@ public static partial class WindowsUpdateDrivers
         }
         File.WriteAllText(job.ResultFile, JsonSerializer.Serialize(results), Encoding.UTF8);
         return 0;
-    }
-
-    private static void CreateRestorePoint(Action<string> log)
-    {
-        log(L.T("Tworzenie punktu przywracania systemu..."));
-        try
-        {
-            using var cls = new ManagementClass(new ManagementPath(@"\\.\root\default:SystemRestore"));
-            using var input = cls.GetMethodParameters("CreateRestorePoint");
-            input["Description"] = "Bezpieczny Aktualizator - sterowniki";
-            input["RestorePointType"] = 12u; // MODIFY_SETTINGS
-            input["EventType"] = 100u;       // BEGIN_SYSTEM_CHANGE
-            using var output = cls.InvokeMethod("CreateRestorePoint", input, null);
-            var code = Convert.ToUInt32(output?["ReturnValue"] ?? 0u);
-            log(code == 0 ? L.T("Punkt przywracania utworzony.")
-                          : L.F("Ostrzeżenie: nie utworzono punktu przywracania (kod {0}). Sprawdź, czy ochrona systemu jest włączona.", code));
-        }
-        catch (Exception ex) when (ex is ManagementException or COMException or UnauthorizedAccessException)
-        {
-            log(L.F("Ostrzeżenie: nie utworzono punktu przywracania: {0}", ex.Message));
-        }
     }
 
     [GeneratedRegex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")]

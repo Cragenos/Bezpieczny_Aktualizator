@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Windows;
 using System.Windows.Threading;
+using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Drivers;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
@@ -41,6 +42,14 @@ public partial class App : Application
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             _ = RunWindowsUpdateOperationAsync(e.Args);
+            return;
+        }
+
+        // Tryb bez okna: proces z uprawnieniami administratora tworzący punkt przywracania przed instalacją.
+        if (e.Args.Length == 2 && e.Args[0] == SystemRestorePoint.CreateArgument)
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            Shutdown(RunCreateRestorePoint(e.Args[1]));
             return;
         }
 
@@ -108,18 +117,47 @@ public partial class App : Application
         Shutdown(code);
     }
 
+    private static int RunCreateRestorePoint(string purposeArgument)
+    {
+        if (!SystemRestorePoint.TryParsePurpose(purposeArgument, out var purpose) || !IsAdministrator())
+            return SystemRestorePoint.ToExitCode(RestorePointOutcome.Failed);
+        Syslog.Info(LogEvent.Backup, L.F("Tworzenie punktu przywracania systemu ({0}).", SystemRestorePoint.Description(purpose)));
+        var result = SystemRestorePoint.Create(purpose);
+        Syslog.Write(result.Succeeded ? SyslogSeverity.Notice : SyslogSeverity.Warning, LogEvent.Backup, result.Detail);
+        return SystemRestorePoint.ToExitCode(result.Outcome);
+    }
+
+    private static bool IsAdministrator()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
     private async Task RunWindowsUpdateOperationAsync(string[] args)
     {
         var exitCode = 1;
         try
         {
-            using var identity = WindowsIdentity.GetCurrent();
-            if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+            if (!IsAdministrator())
                 throw new WindowsUpdateException(L.T("Operacja Windows Update wymaga uprawnień administratora."));
-            if (args.Length != 3 || args[1] is not ("download" or "install"))
+            var backup = args.Length == 4 && args[3] == SystemRestorePoint.CreateArgument;
+            if (args.Length is not (3 or 4) || args.Length == 4 && !backup || args[1] is not ("download" or "install"))
                 throw new WindowsUpdateException(L.T("Nieprawidłowa operacja Windows Update."));
             var action = args[1] == "download" ? WindowsUpdateAction.Download : WindowsUpdateAction.Install;
             var selected = WindowsUpdateAgent.ParseSelection(args[2]);
+            if (backup && action == WindowsUpdateAction.Install)
+            {
+                var point = await Task.Run(() => SystemRestorePoint.Create(RestorePointPurpose.WindowsUpdate));
+                Syslog.Write(point.Succeeded ? SyslogSeverity.Notice : SyslogSeverity.Warning, LogEvent.Backup, point.Detail);
+                if (!point.Succeeded && MessageBox.Show(
+                        point.Detail + "\n\n" + L.T("Kontynuować instalację bez kopii bezpieczeństwa (punktu przywracania)?"),
+                        L.T("Windows Update"), MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+                {
+                    Syslog.Notice(LogEvent.Backup, L.T("Instalację przerwano, ponieważ nie utworzono punktu przywracania."));
+                    Shutdown(1);
+                    return;
+                }
+            }
             var report = await Task.Run(() => WindowsUpdateAgent.Execute(action, selected));
             var lines = new List<string>();
             foreach (var result in report.Outcomes)

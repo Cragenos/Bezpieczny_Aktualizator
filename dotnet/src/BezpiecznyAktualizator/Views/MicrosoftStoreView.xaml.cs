@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
@@ -180,6 +181,8 @@ public partial class MicrosoftStoreView : UserControl
         var unconfirmed = 0;
         var failed = 0;
         var skipped = 0;
+        var notStarted = 0;
+        bool? backupReady = null;
         BottomTabs.SelectedIndex = 1;
         var ok = await _runner.RunAsync(LogEvent.StoreUpdate, L.F("Aktualizowanie {0} programów...", targets.Count), async () =>
         {
@@ -196,6 +199,12 @@ public partial class MicrosoftStoreView : UserControl
                     continue;
                 }
 
+                backupReady ??= await InstallBackup.EnsureAsync(this, RestorePointPurpose.Store, _runner.Log);
+                if (backupReady == false)
+                {
+                    notStarted = targets.Count - targets.IndexOf(item);
+                    break;
+                }
                 _runner.Log(L.F("Aktualizacja {0} ({1})...", item.Name, item.WingetId), SyslogSeverity.Notice);
                 var code = await MicrosoftStoreClient.UpgradeAsync(item, UiLog);
                 if (code != 0)
@@ -237,7 +246,8 @@ public partial class MicrosoftStoreView : UserControl
                       L.F("Niepotwierdzone: {0}", unconfirmed) + "\n" +
                       L.F("Niepowodzenia: {0}", failed);
         if (skipped > 0) summary += "\n" + L.F("Pominięte zgodnie z zasadami aktualizacji: {0}", skipped);
-        if (failed > 0 || unconfirmed > 0) Ui.Warn(this, L.T("Zakończono"), summary);
+        if (notStarted > 0) summary += "\n" + L.F("Nie zainstalowano z powodu braku punktu przywracania: {0}", notStarted);
+        if (failed > 0 || unconfirmed > 0 || notStarted > 0) Ui.Warn(this, L.T("Zakończono"), summary);
         else Ui.Info(this, L.T("Zakończono"), summary);
         await SearchAsync(interactive: false);
     }

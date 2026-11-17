@@ -22,6 +22,7 @@ public partial class DriversView : UserControl
     public DriversView()
     {
         InitializeComponent();
+        RestorePoint.IsChecked = Settings.BackupBeforeInstall;
         _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.DriverScan,
             cancelButton: CancelOperationButton);
         _view = CreateView();

@@ -37,6 +37,7 @@ public partial class MainWindow : Window
         AutoDrivers.IsChecked = Settings.CheckDriversOnStart;
         AutoAppUpdates.IsChecked = Settings.CheckAppUpdatesOnStart;
         PreviewAppUpdates.IsChecked = Settings.IncludePreviewReleases;
+        BackupBeforeInstall.IsChecked = Settings.BackupBeforeInstall;
         ThemeBox.SelectedIndex = (int)Settings.Theme;
         L.LanguageChanged += () => { if (_bannerText is not null) BannerText.Text = _bannerText(); };
     }
@@ -68,9 +69,14 @@ public partial class MainWindow : Window
     private void ShowScheduledResult()
     {
         var state = ScheduleState.Load();
+        if (state.LoadError.Length > 0)
+        {
+            ShowBanner(state.Summary, 0, 0, BannerKind.Warning);
+            return;
+        }
         if (state.LastRun is not { } run || Settings.ScheduleSeen is { } seen && seen >= run) return;
         Settings.ScheduleSeen = run;
-        var kind = state.Error.Length > 0 || state.Failed.Count > 0 ? BannerKind.Warning
+        var kind = state.HasErrors ? BannerKind.Warning
                  : state.Updated.Count > 0 ? BannerKind.Success : BannerKind.Updates;
         if (StartupBanner.Visibility == Visibility.Visible && _bannerText is { } current)
             ShowBanner(() => current() + "\n" + state.Summary(), ShowSoftwareUpdates.IsVisible ? 1 : 0,
@@ -130,8 +136,11 @@ public partial class MainWindow : Window
                         L.T("Aby sprawdzać aktualizacje programu, ustaw GitHub owner/name w Directory.Build.props (UpdateRepository)."));
                 return;
             }
-            if (!showUpToDate) Settings.LastAppUpdateCheck = DateTimeOffset.UtcNow;
-            var check = await ApplicationUpdateService.CheckLatestAsync(Settings.IncludePreviewReleases);
+            var check = showUpToDate
+                ? await ApplicationUpdateService.CheckLatestAsync(Settings.IncludePreviewReleases)
+                : await ApplicationUpdateService.RunAndRecordSuccessfulCheckAsync(
+                    () => ApplicationUpdateService.CheckLatestAsync(Settings.IncludePreviewReleases),
+                    () => Settings.LastAppUpdateCheck = DateTimeOffset.UtcNow);
             if (check.Status == ReleaseCheckStatus.NoRelease)
             {
                 Syslog.Warning(LogEvent.AppUpdate, Settings.IncludePreviewReleases
@@ -208,6 +217,12 @@ public partial class MainWindow : Window
             var signers = SelfProtection.ExpectedSigners;
             Syslog.Info(LogEvent.AppUpdate, L.T("Pobieranie i weryfikowanie podpisanego instalatora MSI."));
             var installer = await ApplicationUpdateService.DownloadAndVerifyAsync(release, signers);
+            if (!await DownloadScan.ScanAsync(this, installer, (text, severity, msgId) => Syslog.Write(severity, msgId ?? LogEvent.AppUpdate, text)))
+            {
+                try { File.Delete(installer); }
+                catch (Exception deleteError) when (deleteError is IOException or UnauthorizedAccessException) { }
+                return;
+            }
             var localData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BezpiecznyAktualizator");
             var settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BezpiecznyAktualizator", "settings.json");
             var backup = UpdateStateBackup.Create(Path.Combine(localData, "Backups"), settings, localData, DateTimeOffset.Now);
@@ -255,6 +270,22 @@ public partial class MainWindow : Window
         Settings.IncludePreviewReleases = PreviewAppUpdates.IsChecked == true;
         Syslog.Info(LogEvent.Settings, L.F("Uwzględnianie testowych wydań programu: {0}.",
             YesNo(PreviewAppUpdates.IsChecked == true)));
+    }
+
+    private void BackupBeforeInstall_Click(object sender, RoutedEventArgs e)
+    {
+        var enabled = BackupBeforeInstall.IsChecked == true;
+        if (!enabled && !Ui.Confirm(this, L.T("Kopia bezpieczeństwa"),
+                L.T("Bez punktu przywracania nie będzie można łatwo cofnąć zmian w systemie, jeśli instalacja lub aktualizacja się nie powiedzie.") +
+                "\n\n" + L.T("Wyłączyć tworzenie punktu przywracania przed instalacją?"), warning: true))
+        {
+            BackupBeforeInstall.IsChecked = true;
+            return;
+        }
+        Settings.BackupBeforeInstall = enabled;
+        Drivers.RestorePoint.IsChecked = enabled;
+        Syslog.Write(enabled ? SyslogSeverity.Informational : SyslogSeverity.Warning, LogEvent.Settings,
+            L.F("Punkt przywracania systemu przed instalacją: {0}.", YesNo(enabled)));
     }
 
     private static string ReleaseNotesSnippet(string notes)

@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Security.Principal;
+using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Drivers;
 using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Inventory;
@@ -40,6 +41,7 @@ public static class ScheduledRunner
             return 0;
         }
         var state = ScheduleState.Load();
+        if (state.LoadError.Length > 0) return 1;
         if (!now && !state.IsDue(DateTimeOffset.Now, options.MinIntervalHours))
         {
             Syslog.Debug(LogEvent.Scheduled, L.F("Pominięto - od ostatniego cichego sprawdzania nie minęło {0} godz.", options.MinIntervalHours));
@@ -59,7 +61,10 @@ public static class ScheduledRunner
             Syslog.Warning(LogEvent.Scheduled, L.T("Brak uprawnień administratora - ciche sprawdzanie tylko wyszuka aktualizacje, bez instalacji."));
             install = false;
         }
-        var constraintSkip = install ? GetInstallationConstraintSkip(options, DateTimeOffset.Now) : null;
+        var constraintSkip = install
+            ? GetInstallationConstraintSkip(options, DateTimeOffset.Now, SystemConditions.IsOnAcPower,
+                SystemConditions.CurrentNetworkCost)
+            : null;
         if (constraintSkip is not null)
         {
             state.LastAttempt = DateTimeOffset.Now;
@@ -74,13 +79,17 @@ public static class ScheduledRunner
             now ? L.T("uruchomione ręcznie") : L.T("bezczynność komputera"),
             install ? L.T("instalacja z zaufanych źródeł") : L.T("tylko sprawdzanie")));
 
-        var result = new ScheduleState { LastRun = DateTimeOffset.Now, LastAttempt = DateTimeOffset.Now, Installed = install };
+        var started = DateTimeOffset.Now;
+        var result = new ScheduleState { LastRun = started, LastAttempt = started, Installed = install };
+        var backup = install && Settings.BackupBeforeInstall
+            ? new RestorePointGate(() => SystemRestorePoint.Create(RestorePointPurpose.Scheduled))
+            : null;
         try
         {
-            await UpdateSoftwareAsync(options, install, now, result);
-            await CheckWindowsUpdatesAsync(options, install, now, result);
+            await UpdateSoftwareAsync(options, install, now, result, backup);
+            await CheckWindowsUpdatesAsync(options, install, now, result, backup);
             if (options.CheckDrivers && !result.Interrupted)
-                await Task.Run(() => CheckDrivers(options, install, now, result));
+                await Task.Run(() => CheckDrivers(options, install, now, result, backup));
         }
         catch (Exception ex)
         {
@@ -90,7 +99,23 @@ public static class ScheduledRunner
         result.Save();
         Syslog.Notice(LogEvent.Scheduled, result.Summary());
         await SendNotificationsAsync(result.Summary());
-        return result.Error.Length > 0 ? 1 : 0;
+        return GetExitCode(result);
+    }
+
+    internal static int GetExitCode(ScheduleState state) => state.HasErrors ? 1 : 0;
+
+    /// <summary>
+    /// Punkt przywracania przed pierwszą cichą instalacją w przebiegu. Zwraca powód pominięcia instalacji,
+    /// gdy kopii nie udało się utworzyć (bez kopii ciche instalacje nie są wykonywane).
+    /// </summary>
+    internal static string? EnsureBackup(RestorePointGate? gate)
+    {
+        if (gate is null) return null;
+        var first = !gate.Attempted;
+        var backup = gate.Ensure();
+        if (first)
+            Syslog.Write(backup.Succeeded ? SyslogSeverity.Notice : SyslogSeverity.Warning, LogEvent.Backup, backup.Detail);
+        return backup.Succeeded ? null : L.F("brak punktu przywracania systemu: {0}", backup.Detail);
     }
 
     private static async Task SendNotificationsAsync(string summary)
@@ -117,19 +142,20 @@ public static class ScheduledRunner
 
     private static bool UserReturned(bool now) => !now && IdleTime.Current < ActiveThreshold;
 
-    private static string? GetInstallationConstraintSkip(ScheduleOptions options, DateTimeOffset now)
+    internal static string? GetInstallationConstraintSkip(
+        ScheduleOptions options, DateTimeOffset now, Func<bool> isOnAcPower, Func<MeteredNetworkState> networkCost)
     {
         if (!options.IsWithinMaintenanceWindow(now))
             return L.F("poza oknem serwisowym {0}-{1}", options.WindowStart, options.WindowEnd);
-        if (options.SkipOnBattery && !SystemConditions.IsOnAcPower())
+        if (options.SkipOnBattery && !isOnAcPower())
             return L.T("komputer nie jest podłączony do zasilania sieciowego");
-        if (options.SkipOnMeteredNetwork && SystemConditions.CurrentNetworkCost() != MeteredNetworkState.Unmetered)
+        if (options.SkipOnMeteredNetwork && networkCost() != MeteredNetworkState.Unmetered)
             return L.T("sieć ma taryfowy lub nieznany koszt");
         return null;
     }
 
     private static async Task CheckWindowsUpdatesAsync(ScheduleOptions options, bool install, bool now,
-                                                        ScheduleState result)
+                                                        ScheduleState result, RestorePointGate? backup)
     {
             if (!options.CheckWindowsUpdates) return;
             WindowsUpdateSearchResult search;
@@ -156,12 +182,24 @@ public static class ScheduledRunner
                 Syslog.Info(LogEvent.Scheduled, L.F("Pominięto aktualizację Windows {0}: instalacja automatyczna wymaga oznaczenia jako obowiązkowa i uprzedniej akceptacji licencji.", update.Title));
             if (candidates.Count == 0) return;
 
-            foreach (var update in candidates)
+            for (var index = 0; index < candidates.Count; index++)
             {
+                var update = candidates[index];
                 if (UserReturned(now))
                 {
                     result.Interrupted = true;
                     Syslog.Notice(LogEvent.Scheduled, L.T("Przerwano instalację aktualizacji Windows, ponieważ użytkownik wrócił do komputera."));
+                    return;
+                }
+
+                var constraintSkip = GetInstallationConstraintSkip(options, DateTimeOffset.Now,
+                    SystemConditions.IsOnAcPower, SystemConditions.CurrentNetworkCost);
+                constraintSkip ??= await Task.Run(() => EnsureBackup(backup));
+                if (constraintSkip is not null)
+                {
+                    result.SkipReason = constraintSkip;
+                    result.Skipped.AddRange(candidates.Skip(index).Select(item => item.Title));
+                    Syslog.Notice(LogEvent.Scheduled, L.F("Pominięto ciche instalacje: {0}", constraintSkip));
                     return;
                 }
 
@@ -199,7 +237,8 @@ public static class ScheduledRunner
             }
         }
 
-    private static async Task UpdateSoftwareAsync(ScheduleOptions options, bool install, bool now, ScheduleState result)
+    private static async Task UpdateSoftwareAsync(ScheduleOptions options, bool install, bool now, ScheduleState result,
+                                                  RestorePointGate? backup)
     {
         if (!WingetClient.IsAvailable())
         {
@@ -358,6 +397,19 @@ public static class ScheduledRunner
                     }
                     result.Retries++;
                 }
+                var constraintSkip = GetInstallationConstraintSkip(options, DateTimeOffset.Now,
+                    SystemConditions.IsOnAcPower, SystemConditions.CurrentNetworkCost);
+                constraintSkip ??= await Task.Run(() => EnsureBackup(backup));
+                if (constraintSkip is not null)
+                {
+                    result.SkipReason = constraintSkip;
+                    if (code != -1) result.Failed.Add(label);
+                    var remaining = candidates.SkipWhile(candidate => candidate != s);
+                    if (code != -1) remaining = remaining.Skip(1);
+                    result.Skipped.AddRange(remaining.Select(item => $"{item.Name} {item.Version} → {item.AvailableVersion}"));
+                    Syslog.Notice(LogEvent.Scheduled, L.F("Pominięto ciche instalacje: {0}", constraintSkip));
+                    return;
+                }
                 code = await WingetClient.UpgradeVerifiedAsync(verifiedInstaller!, line => Syslog.Debug(LogEvent.Upgrade, line));
                 if (code == 0) break;
                 Syslog.Warning(LogEvent.Upgrade, L.F("Próba {0}/{1} aktualizacji {2} zakończyła się kodem 0x{3:X8}.",
@@ -396,7 +448,8 @@ public static class ScheduledRunner
         }
     }
 
-    private static void CheckDrivers(ScheduleOptions options, bool install, bool now, ScheduleState result)
+    private static void CheckDrivers(ScheduleOptions options, bool install, bool now, ScheduleState result,
+                                     RestorePointGate? backup)
     {
         try
         {
@@ -409,14 +462,33 @@ public static class ScheduledRunner
                 result.Interrupted = true;
                 return;
             }
-            var results = WindowsUpdateDrivers.InstallInProcess(updates.Select(u => u.UpdateId).ToList(), restorePoint: true,
+            var constraintSkip = GetInstallationConstraintSkip(options, DateTimeOffset.Now,
+                SystemConditions.IsOnAcPower, SystemConditions.CurrentNetworkCost) ?? EnsureBackup(backup);
+            if (constraintSkip is not null)
+            {
+                result.SkipReason = constraintSkip;
+                result.Skipped.AddRange(updates.Select(update => update.Title));
+                Syslog.Notice(LogEvent.Scheduled, L.F("Pominięto ciche instalacje: {0}", constraintSkip));
+                return;
+            }
+            // Punkt przywracania tworzy bramka przebiegu (gdy kopie są włączone), a nie zadanie instalacji.
+            var results = WindowsUpdateDrivers.InstallInProcess(updates.Select(u => u.UpdateId).ToList(), restorePoint: false,
                                                                 line => Syslog.Info(LogEvent.DriverInstall, line));
             result.DriversInstalled = results.Count(r => r.Succeeded);
+            var failures = results.Where(r => !r.Succeeded).ToList();
+            if (failures.Count > 0)
+            {
+                result.Failed.AddRange(failures.Select(r => r.Title.Length > 0 ? r.Title : L.T("Błąd")));
+                result.DriverError = string.Join("; ", failures.Select(r =>
+                    $"{r.Title}: {(r.Error.Length > 0 ? r.Error : r.ResultText)}"));
+                Syslog.Error(LogEvent.Scheduled, L.F("Błąd: {0}", result.DriverError));
+            }
             if (results.Any(r => r.RebootRequired))
                 Syslog.Warning(LogEvent.DriverInstall, L.T("Do zakończenia instalacji sterowników wymagane jest ponowne uruchomienie komputera."));
         }
         catch (DriverException ex)
         {
+            result.DriverError = ex.Message;
             Syslog.Error(LogEvent.Scheduled, ex.Message, ex);
         }
     }

@@ -35,6 +35,7 @@ public static class LogEvent
     public const string AppUpdate = "APP_UPDATE";
     public const string WindowsUpdate = "WINDOWS_UPDATE";
     public const string StoreUpdate = "STORE_UPDATE";
+    public const string Backup = "BACKUP";
     public const string Error = "ERROR";
 }
 

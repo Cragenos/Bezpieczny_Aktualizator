@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Catalogs;
 using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Inventory;
@@ -351,12 +352,20 @@ public partial class SoftwareView : UserControl
                 defenderAvailable ? SyslogSeverity.Informational : SyslogSeverity.Warning));
             lines.Add(($"ESET: {esetStatus}",
                 esetAvailable ? SyslogSeverity.Informational : SyslogSeverity.Warning));
-            var antivirusReady = defenderAvailable || esetAvailable;
+            var amsiEngines = await Task.Run(() => AmsiScanner.AvailableEngines(products), ct);
+            var amsiAvailable = amsiEngines.Count > 0;
+            lines.Add(("AMSI: " + (amsiAvailable ? string.Join(", ", amsiEngines) : L.T("Skaner jest niedostępny")),
+                amsiAvailable ? SyslogSeverity.Informational : SyslogSeverity.Warning));
+            var antivirusReady = defenderAvailable || esetAvailable || amsiAvailable;
             var readinessMessage = antivirusReady
                 ? L.T("Co najmniej jeden zaufany skaner jest gotowy.")
                 : L.T("Brak aktywnego zaufanego skanera; aktualizacja może wymagać zgody na pominięcie skanowania.");
             lines.Add((readinessMessage,
                 antivirusReady ? SyslogSeverity.Informational : SyslogSeverity.Warning));
+            lines.Add((Settings.BackupBeforeInstall
+                    ? L.T("Kopia bezpieczeństwa: punkt przywracania systemu przed każdą instalacją.")
+                    : L.T("Kopia bezpieczeństwa: wyłączona w ustawieniach."),
+                Settings.BackupBeforeInstall ? SyslogSeverity.Informational : SyslogSeverity.Warning));
 
             foreach (var line in lines) _runner.Log(line.Text, line.Severity);
         }, typeof(WingetException), typeof(AntivirusInventoryException));
@@ -452,14 +461,19 @@ public partial class SoftwareView : UserControl
     private async void Antivirus_Click(object sender, RoutedEventArgs e)
     {
         IReadOnlyList<AntivirusProduct> products = [];
+        var report = "";
         var ok = await _runner.RunIndependentAsync(LogEvent.Antivirus, L.T("Odczytywanie informacji o lokalnych antywirusach..."), async () =>
         {
             products = await Task.Run(AntivirusInventory.GetRegisteredProducts);
-            _runner.Log(AntivirusInventory.Describe(products).ToString(), SyslogSeverity.Informational);
+            var methods = await Task.Run(() => AntivirusScan.AvailableMethods(products));
+            report = AntivirusInventory.Describe(products).ToString() + "\n\n" + (methods.Count > 0
+                ? L.T("Pobierane aktualizacje mogą być skanowane przez:") + "\n" + string.Join("\n", methods.Select(m => "• " + m))
+                : L.T("Brak aktywnego zaufanego skanera; aktualizacja może wymagać zgody na pominięcie skanowania."));
+            _runner.Log(report, SyslogSeverity.Informational);
         }, typeof(AntivirusInventoryException));
         if (!ok) return;
         BottomTabs.SelectedIndex = 1;
-        Ui.Info(this, L.T("Ochrona antywirusowa"), AntivirusInventory.Describe(products).ToString());
+        Ui.Info(this, L.T("Ochrona antywirusowa"), report);
     }
 
     private async void Risk_Click(object sender, RoutedEventArgs e)
@@ -725,6 +739,11 @@ public partial class SoftwareView : UserControl
                 Settings.LoadPolicies(out policyError);
                 if (policyError is not null)
                     throw new WingetException(L.F("Nie można wczytać zasad komputera. Aktualizowanie zablokowane: {0}", policyError));
+                if (!await InstallBackup.EnsureAsync(this, RestorePointPurpose.Software, _runner.Log))
+                {
+                    blocked = true;
+                    return;
+                }
                 _runner.Log(L.F("Przywracanie {0} ({1}) do wersji {2}...", record.Name, record.WingetId, version), SyslogSeverity.Notice, LogEvent.Rollback);
                 code = verifiedInstaller is null
                     ? await WingetClient.InstallVersionAsync(record.WingetId, version, line => UiLog("  " + line), record.Source)
@@ -866,6 +885,8 @@ public partial class SoftwareView : UserControl
         var results = new List<(Software Item, int Code, bool Confirmed)>();
         var blocked = new List<Software>();
         var unconfirmed = new List<Software>();
+        var notStarted = new List<Software>();
+        bool? backupReady = null;
         var ok = await _runner.RunAsync(LogEvent.Upgrade, L.F("Aktualizowanie {0} programów...", targets.Count), async () =>
         {
             foreach (var s in targets)
@@ -905,6 +926,12 @@ public partial class SoftwareView : UserControl
                         _runner.Log(L.F("Pominięto {0}: {1}", s.Name, currentDecision.Reason.ToString()),
                             SyslogSeverity.Notice, LogEvent.Policy);
                         continue;
+                    }
+                    backupReady ??= await InstallBackup.EnsureAsync(this, RestorePointPurpose.Software, _runner.Log);
+                    if (backupReady == false)
+                    {
+                        notStarted.AddRange(targets.SkipWhile(t => t != s));
+                        break;
                     }
                     _runner.Log(L.F("Aktualizacja {0} ({1})...", s.Name, s.WingetId), SyslogSeverity.Notice);
                     var code = verifiedInstaller is null
@@ -952,6 +979,9 @@ public partial class SoftwareView : UserControl
         if (blocked.Count > 0)
             summary += "\n" + L.F("Wstrzymane po weryfikacji plików kontrolnych: {0}", blocked.Count) + "\n" +
                        string.Join("\n", blocked.Select(b => "  • " + b.Name));
+        if (notStarted.Count > 0)
+            summary += "\n" + L.F("Nie zainstalowano z powodu braku punktu przywracania: {0}", notStarted.Count) + "\n" +
+                       string.Join("\n", notStarted.Select(b => "  • " + b.Name));
         Ui.Info(this, L.T("Zakończono"), summary + "\n\n" + L.T("Szczegóły w zakładce „Dziennik”."));
         await CheckUpdatesAsync();
     }
@@ -1014,7 +1044,7 @@ public partial class SoftwareView : UserControl
             var antivirusInfo = result.AntivirusInventoryCheck?.Detail?.ToString();
             var scanStatus = result.ScanSkipped
                 ? L.T("Skanowanie antywirusowe pominięto celowo.")
-                : L.F("Microsoft Defender oraz zaufany skaner ESET są niedostępni, więc instalator {0} nie został przeskanowany przed instalacją.", name);
+                : L.F("Żaden zaufany skaner antywirusowy (Microsoft Defender, ESET ani interfejs AMSI aktywnego antywirusa) nie był dostępny, więc plik {0} nie został przeskanowany.", name);
             var install = Ui.Confirm(this, L.T("Skanowanie antywirusowe"),
                 scanStatus +
                 (antivirusInfo is null ? "" : "\n\n" + antivirusInfo) +

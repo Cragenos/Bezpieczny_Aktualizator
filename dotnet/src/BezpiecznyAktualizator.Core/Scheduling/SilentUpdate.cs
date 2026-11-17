@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Globalization;
 using BezpiecznyAktualizator.Core.Localization;
+using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Security;
@@ -143,11 +144,15 @@ public sealed class ScheduleState
     public int WindowsUpdatesInstalled { get; set; }
     public bool WindowsUpdateRebootRequired { get; set; }
     public string WindowsUpdateError { get; set; } = "";
+    public string DriverError { get; set; } = "";
     public int Retries { get; set; }
     public bool Interrupted { get; set; }
     public string Error { get; set; } = "";
     public DateTimeOffset? LastAttempt { get; set; }
     public string SkipReason { get; set; } = "";
+    [JsonIgnore] public string LoadError { get; private set; } = "";
+    [JsonIgnore] public bool HasErrors => LoadError.Length > 0 || Error.Length > 0 || WindowsUpdateError.Length > 0 ||
+                                          DriverError.Length > 0 || Failed.Count > 0;
 
     /// <summary>Czy od ostatniego uruchomienia minął wymagany odstęp.</summary>
     public bool IsDue(DateTimeOffset now, int minIntervalHours) =>
@@ -157,22 +162,77 @@ public sealed class ScheduleState
     {
         try
         {
-            return File.Exists(FilePath) ? JsonSerializer.Deserialize<ScheduleState>(File.ReadAllText(FilePath), Json) ?? new() : new();
+            using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return JsonSerializer.Deserialize<ScheduleState>(stream, Json)
+                ?? throw new InvalidDataException("Schedule state JSON contained null.");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (FileNotFoundException)
         {
             return new();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new();
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            // Uszkodzony plik stanu nie może trwale blokować cichych aktualizacji - odłóż go i zacznij od nowa.
+            var corruptPath = $"{Path.GetFullPath(FilePath)}.corrupt-{DateTime.Now:yyyyMMddHHmmss}";
+            try
+            {
+                File.Move(FilePath, corruptPath, overwrite: true);
+            }
+            catch (Exception moveEx) when (moveEx is IOException or UnauthorizedAccessException)
+            {
+                Syslog.Error(LogEvent.Scheduled, L.T("Błąd cichego sprawdzania."), moveEx);
+                return new() { LoadError = ex.Message };
+            }
+            Syslog.Warning(LogEvent.Scheduled, L.F("Uszkodzony plik stanu harmonogramu przeniesiono do {0}: {1}",
+                corruptPath, ex.Message));
+            return new();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Syslog.Error(LogEvent.Scheduled, L.T("Błąd cichego sprawdzania."), ex);
+            return new() { LoadError = ex.Message };
         }
     }
 
     public void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+        if (LoadError.Length > 0)
+            throw new InvalidOperationException(L.F("Błąd: {0}", LoadError));
+
+        var fullPath = Path.GetFullPath(FilePath);
+        var directory = Path.GetDirectoryName(fullPath)
+            ?? throw new InvalidOperationException("Could not determine the schedule-state directory.");
+        Directory.CreateDirectory(directory);
+        var temporaryPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(stream, this, Json);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, fullPath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Syslog.Warning(LogEvent.Scheduled, $"Could not remove temporary schedule state file '{temporaryPath}': {ex.Message}");
+            }
+        }
     }
 
     public string Summary()
     {
+        if (LoadError.Length > 0) return L.F("Błąd: {0}", LoadError);
         if (LastAttempt is { } latestAttempt && SkipReason.Length > 0 &&
             (LastRun is null || latestAttempt > LastRun))
             return L.F("Ostatnia próba cichego sprawdzania: {0}. Pominięto: {1}",
@@ -190,6 +250,8 @@ public sealed class ScheduleState
                 WindowsUpdates, WindowsUpdatesInstalled);
         if (WindowsUpdateRebootRequired) text += " " + L.T("Windows Update wymaga ponownego uruchomienia komputera.");
         if (WindowsUpdateError.Length > 0) text += " " + L.F("Błąd Windows Update: {0}", WindowsUpdateError);
+        if (DriverError.Length > 0) text += " " + L.F("Błąd: {0}", DriverError);
+        if (SkipReason.Length > 0) text += " " + L.F("Pominięto ciche instalacje: {0}", SkipReason);
         if (Retries > 0) text += " " + L.F("Ponowienia nieudanych instalacji: {0}.", Retries);
         if (Interrupted) text += " " + L.T("Przerwano, ponieważ użytkownik wrócił do komputera.");
         if (Error.Length > 0) text += " " + L.F("Błąd: {0}", Error);

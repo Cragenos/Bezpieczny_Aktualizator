@@ -256,8 +256,9 @@ public class InstallerVerifierLiveTests
         Assert.True(result.Completed, result.Error?.ToString());
         Assert.False(result.Blocked);
         Assert.Contains(result.Checks, c => c.Status == CheckStatus.Ok && c.Label.ToString().Contains("wydawcy"));
-        // Bez czystego wyniku skanowania Defender instalator nie może zostać uznany za zweryfikowany.
-        Assert.Equal(!result.DefenderUnavailable, result.Passed);
-        Assert.Equal(result.DefenderUnavailable, result.PassedWithoutScan);
+        // Bez czystego wyniku skanowania (Defender, ESET lub AMSI) instalator nie może zostać uznany za zweryfikowany.
+        Assert.Equal(result.AntivirusScanPassed, result.Passed);
+        Assert.Equal(!result.AntivirusScanPassed, result.PassedWithoutScan);
+        if (!result.DefenderUnavailable) Assert.True(result.AntivirusScanPassed);
     }
 }

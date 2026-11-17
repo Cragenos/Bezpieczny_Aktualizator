@@ -79,7 +79,7 @@ public static class Settings
     {
         get { lock (Gate) return _readError ?? _writeError; }
     }
-
+
     // Zapisywana w settings.json: nazwy właściwości nie mogą być zmieniane przez zaciemnianie kodu.
     [System.Reflection.Obfuscation(Exclude = true)]
     private sealed class Data
@@ -89,6 +89,7 @@ public static class Settings
         public bool? CheckDriversOnStart { get; set; }
         public bool? CheckAppUpdatesOnStart { get; set; }
         public bool? IncludePreviewReleases { get; set; }
+        public bool? BackupBeforeInstall { get; set; }
         public DateTimeOffset? LastAppUpdateCheck { get; set; }
         public string? Theme { get; set; }
         public ScheduleOptions? Schedule { get; set; }
@@ -169,6 +170,13 @@ public static class Settings
     {
         get => Read().IncludePreviewReleases ?? false;
         set => Update(d => d.IncludePreviewReleases = value);
+    }
+
+    /// <summary>Punkt przywracania systemu przed każdą instalacją/aktualizacją (domyślnie włączone).</summary>
+    public static bool BackupBeforeInstall
+    {
+        get => Read().BackupBeforeInstall ?? true;
+        set => Update(d => d.BackupBeforeInstall = value);
     }
 
     public static DateTimeOffset? LastAppUpdateCheck

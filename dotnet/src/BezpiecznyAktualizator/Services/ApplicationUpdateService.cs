@@ -46,6 +46,13 @@ internal static class ApplicationUpdateService
             .ConfigureAwait(false);
     }
 
+    internal static async Task<T> RunAndRecordSuccessfulCheckAsync<T>(Func<Task<T>> check, Action record)
+    {
+        var result = await check().ConfigureAwait(false);
+        record();
+        return result;
+    }
+
     public static async Task<string> DownloadAndVerifyAsync(ApplicationRelease release, IReadOnlyCollection<string> expectedSigners,
         CancellationToken cancellationToken = default)
     {

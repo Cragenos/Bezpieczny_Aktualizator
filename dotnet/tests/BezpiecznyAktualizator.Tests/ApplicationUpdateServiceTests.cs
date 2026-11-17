@@ -50,6 +50,24 @@ public class ApplicationUpdateServiceTests
     }
 
     [Fact]
+    public async Task AutomaticCheckTimestampIsRecordedOnlyAfterSuccess()
+    {
+        var recorded = false;
+        var result = await ApplicationUpdateService.RunAndRecordSuccessfulCheckAsync(
+            () => Task.FromResult("up-to-date"),
+            () => recorded = true);
+        Assert.Equal("up-to-date", result);
+        Assert.True(recorded);
+
+        recorded = false;
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            ApplicationUpdateService.RunAndRecordSuccessfulCheckAsync<string>(
+                () => Task.FromException<string>(new HttpRequestException("offline")),
+                () => recorded = true));
+        Assert.False(recorded);
+    }
+
+    [Fact]
     public async Task DigestMismatchDeletesDownloadedInstaller()
     {
         var directory = Path.Combine(Path.GetTempPath(), "ba-update-" + Guid.NewGuid().ToString("N"));

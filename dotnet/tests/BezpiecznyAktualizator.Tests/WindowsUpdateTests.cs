@@ -37,6 +37,18 @@ public class WindowsUpdateTests
     }
 
     [Fact]
+    public void SearchCallbackIsExposedToCom()
+    {
+        var calls = 0;
+        var callback = new SearchCompletedCallback(() => calls++);
+        // Windows Update odpytuje wywołanie zwrotne o ISearchCompletedCallback - typy niepubliczne nie są widoczne dla COM.
+        var pointer = Marshal.GetComInterfaceForObject(callback, typeof(ISearchCompletedCallback));
+        Marshal.Release(pointer);
+        ((ISearchCompletedCallback)callback).Invoke(new object(), new object());
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task AsyncSearchCancellationAbortsAndCleansUpAfterCompletion()
     {
         using var cancellation = new CancellationTokenSource();

@@ -192,10 +192,9 @@ public static partial class InstallerVerifier
                     result.AntivirusScanPassed = true;
                 else if (scan.Verdict == DefenderVerdict.Unavailable)
                 {
-                    progress?.Invoke(L.T("Skanowanie instalatora programem ESET..."));
-                    var esetScan = await EsetScanner.ScanFileAsync(installer, ct);
-                    result.Checks.Add(EsetScanner.Check(esetScan));
-                    result.AntivirusScanPassed = esetScan.Verdict == EsetVerdict.Clean;
+                    var (verdict, checks) = await AntivirusScan.ScanWithFallbackAsync(installer, progress, ct);
+                    result.Checks.AddRange(checks);
+                    result.AntivirusScanPassed = verdict == AntivirusVerdict.Clean;
                 }
             }
             else

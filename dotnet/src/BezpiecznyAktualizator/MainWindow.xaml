@@ -44,6 +44,8 @@
                                       IsCheckable="True" Click="AutoAppUpdates_Click" />
                             <MenuItem x:Name="PreviewAppUpdates" Header="{l:Tr 'Uwzględniaj wydania testowe programu (beta)'}"
                                       IsCheckable="True" Click="PreviewAppUpdates_Click" />
+                            <MenuItem x:Name="BackupBeforeInstall" Header="{l:Tr 'Twórz punkt przywracania systemu przed instalacją'}"
+                                      IsCheckable="True" Click="BackupBeforeInstall_Click" />
                             <Separator />
                             <MenuItem Header="{l:Tr 'Sprawdź teraz'}" Click="CheckNow_Click" />
                             <Separator />

@@ -4,25 +4,30 @@ using BezpiecznyAktualizator.Core.Localization;
 
 namespace BezpiecznyAktualizator.Core.Updates;
 
+/// <summary>Wywołanie zwrotne IUpdateSearcher.BeginSearch - typy muszą być publiczne, aby były widoczne dla COM.</summary>
+[ComVisible(true)]
+[Guid("88aee058-d4b0-4725-a2f1-814a67ae964c")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface ISearchCompletedCallback
+{
+    void Invoke(
+        [In, MarshalAs(UnmanagedType.Interface)] object searchJob,
+        [In, MarshalAs(UnmanagedType.Interface)] object callbackArgs);
+}
+
+[ComVisible(true)]
+[ClassInterface(ClassInterfaceType.None)]
+public sealed class SearchCompletedCallback : ISearchCompletedCallback
+{
+    private readonly Action _completed;
+
+    internal SearchCompletedCallback(Action completed) => _completed = completed;
+
+    public void Invoke(object searchJob, object callbackArgs) => _completed();
+}
+
 internal static class WindowsUpdateInterop
 {
-    [ComVisible(true)]
-    [Guid("88aee058-d4b0-4725-a2f1-814a67ae964c")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface ISearchCompletedCallback
-    {
-        void Invoke(
-            [In, MarshalAs(UnmanagedType.Interface)] object searchJob,
-            [In, MarshalAs(UnmanagedType.Interface)] object callbackArgs);
-    }
-
-    [ComVisible(true)]
-    [ClassInterface(ClassInterfaceType.None)]
-    private sealed class SearchCompletedCallback(Action completed) : ISearchCompletedCallback
-    {
-        public void Invoke(object searchJob, object callbackArgs) => completed();
-    }
-
     internal static dynamic CreateCom(string progId)
     {
         var type = Type.GetTypeFromProgID(progId) ??
@@ -49,7 +54,8 @@ internal static class WindowsUpdateInterop
                 completed =>
                 {
                     callback = new SearchCompletedCallback(completed);
-                    job = searcher.BeginSearch(criteria, callback, Type.Missing);
+                    // BeginSearch oczekuje IUnknown - bez opakowania wiązanie dynamic zgłasza niezgodność typu.
+                    job = searcher.BeginSearch(criteria, new UnknownWrapper(callback), Type.Missing);
                 },
                 () => ((dynamic)job!).RequestAbort(),
                 () => (object)searcher.EndSearch(job!),
