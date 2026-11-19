@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "Der Filter überspringt {0} Dateien über 1 GiB ({1}). Sie können nicht wiederhergestellt werden. Fortfahren?",
   "Nie można ustalić dysku docelowego.": "Das Ziellaufwerk kann nicht ermittelt werden.",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "Der freie Speicherplatz konnte nicht geprüft werden: {0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "Laufwerk {0}: benötigt {1}, verfügbar {2}",
   "Za mało wolnego miejsca": "Nicht genügend freier Speicherplatz",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "Die geschätzte Datengröße ({0}) überschreitet den freien Speicherplatz auf dem Laufwerk ({1}). Das Paket kann nach der Komprimierung kleiner sein. Fortfahren?",
   "Pakowanie": "Packen",

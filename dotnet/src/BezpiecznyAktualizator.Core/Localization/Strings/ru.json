@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "Фильтр пропустит {0} файлов размером более 1 ГиБ ({1}). Их нельзя будет восстановить. Продолжить?",
   "Nie można ustalić dysku docelowego.": "Не удалось определить целевой диск.",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "Не удалось проверить свободное место на диске: {0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "Диск {0}: требуется {1}, доступно {2}",
   "Za mało wolnego miejsca": "Недостаточно свободного места",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "Расчётный размер данных ({0}) превышает свободное место на диске ({1}). После сжатия пакет может быть меньше. Продолжить?",
   "Pakowanie": "Упаковка",

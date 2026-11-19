@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "筛选器将跳过 {0} 个大于 1 GiB 的文件（{1}）。这些文件将无法还原。是否继续？",
   "Nie można ustalić dysku docelowego.": "无法确定目标驱动器。",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "无法检查磁盘可用空间：{0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "驱动器 {0}：需要 {1}，可用 {2}",
   "Za mało wolnego miejsca": "可用空间不足",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "估计的数据大小（{0}）超过磁盘可用空间（{1}）。压缩后的软件包可能更小。是否继续？",
   "Pakowanie": "正在打包",

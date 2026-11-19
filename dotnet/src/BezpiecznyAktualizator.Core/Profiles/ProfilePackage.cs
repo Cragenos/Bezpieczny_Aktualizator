@@ -47,6 +47,9 @@ public enum RestoreConflictMode
 
 public sealed record ProfileRestoreResult(int Restored, int Skipped, int BackedUp, int Renamed, string? BackupFolder, IReadOnlyList<string> Problems);
 
+public sealed record ProfileRestorePreview(int FilesToWrite, long BytesToWrite, int ExistingFiles, long ExistingBytes,
+                                           int SkippedFiles, IReadOnlyDictionary<string, long> BytesByVolume);
+
 /// <summary>
 /// Paczka do przeniesienia folderów profilu na inny komputer: archiwum ZIP z plikami w <c>files/&lt;klucz&gt;/…</c>
 /// i <c>manifest.json</c> z rozmiarem i sumą SHA256 każdego pliku; opcjonalnie zaszyfrowana hasłem (AES-256-GCM).
@@ -243,6 +246,56 @@ public static class ProfilePackage
             }
         }
         return new ProfileVerification(manifest, package.Encrypted, problems);
+    }
+
+    /// <summary>Szacuje konflikty i wymagane miejsce bez zapisywania plików.</summary>
+    public static ProfileRestorePreview PreviewRestore(ProfileVerification verification, IReadOnlyList<ProfileFolderPath> targets,
+                                                        RestoreConflictMode mode, CancellationToken cancellationToken = default)
+    {
+        if (!verification.Succeeded)
+            throw new ProfilePackageException(L.T("Paczka nie przeszła weryfikacji – niczego nie przywrócono."));
+
+        var map = targets.ToDictionary(t => t.Key, t => Path.GetFullPath(t.Path), StringComparer.Ordinal);
+        var bytesByVolume = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        int filesToWrite = 0, existingFiles = 0, skippedFiles = 0;
+        long bytesToWrite = 0, existingBytes = 0;
+
+        foreach (var file in verification.Manifest.Files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var separator = file.Path.IndexOf('/');
+            if (separator <= 0 || !map.TryGetValue(file.Path[..separator], out var root))
+            {
+                skippedFiles++;
+                continue;
+            }
+
+            var destination = SafeCombine(root, file.Path[(separator + 1)..]);
+            if (ContainsLink(root, destination) || Directory.Exists(destination))
+            {
+                skippedFiles++;
+                continue;
+            }
+
+            if (File.Exists(destination))
+            {
+                existingFiles++;
+                existingBytes += new FileInfo(destination).Length;
+                if (mode == RestoreConflictMode.Skip)
+                {
+                    skippedFiles++;
+                    continue;
+                }
+            }
+
+            filesToWrite++;
+            bytesToWrite += file.Size;
+            var volume = Path.GetPathRoot(destination);
+            if (string.IsNullOrEmpty(volume)) continue;
+            bytesByVolume[volume] = bytesByVolume.GetValueOrDefault(volume) + file.Size;
+        }
+
+        return new ProfileRestorePreview(filesToWrite, bytesToWrite, existingFiles, existingBytes, skippedFiles, bytesByVolume);
     }
 
     /// <summary>

@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "The filter will skip {0} files larger than 1 GiB ({1}). They will not be available to restore. Continue?",
   "Nie można ustalić dysku docelowego.": "Cannot determine the destination drive.",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "Could not check the disk free space: {0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "Drive {0}: required {1}, available {2}",
   "Za mało wolnego miejsca": "Not enough free space",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "The estimated data size ({0}) exceeds the free space on the disk ({1}). The package may be smaller after compression. Continue?",
   "Pakowanie": "Packing",

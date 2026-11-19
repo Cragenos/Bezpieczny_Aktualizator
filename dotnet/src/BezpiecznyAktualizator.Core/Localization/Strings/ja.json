@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "フィルターは 1 GiB を超える {0} 個のファイルをスキップします（{1}）。これらは復元できません。続行しますか？",
   "Nie można ustalić dysku docelowego.": "保存先のドライブを特定できません。",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "ディスクの空き容量を確認できませんでした: {0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "ドライブ {0}: 必要 {1}、空き {2}",
   "Za mało wolnego miejsca": "空き容量が不足しています",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "推定データサイズ（{0}）がディスクの空き容量（{1}）を超えています。圧縮後のパッケージは小さくなる場合があります。続行しますか？",
   "Pakowanie": "パッケージ化",

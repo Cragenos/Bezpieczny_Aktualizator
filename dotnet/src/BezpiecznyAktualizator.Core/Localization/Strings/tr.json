@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "Filtre, 1 GiB üzerindeki {0} dosyayı atlayacak ({1}). Bu dosyalar geri yüklenemeyecek. Devam edilsin mi?",
   "Nie można ustalić dysku docelowego.": "Hedef sürücü belirlenemiyor.",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "Diskteki boş alan denetlenemedi: {0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "Sürücü {0}: gereken {1}, kullanılabilir {2}",
   "Za mało wolnego miejsca": "Yeterli boş alan yok",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "Tahmini veri boyutu ({0}), diskteki boş alanı ({1}) aşıyor. Sıkıştırma sonrasında paket daha küçük olabilir. Devam edilsin mi?",
   "Pakowanie": "Paketleniyor",

@@ -87,6 +87,36 @@ public sealed class ProfilePackageTests : IDisposable
     }
 
     [Fact]
+    public void RestorePreviewReportsConflictsAndRequiredBytesWithoutWritingFiles()
+    {
+        var source = CreateSource();
+        var package = PathOf("profil" + ProfilePackage.Extension);
+        ProfilePackage.Create(Folders(source), package, "PC\\jan", source);
+        var verification = ProfilePackage.Verify(package);
+        var target = PathOf("dst");
+        var existing = Path.Combine(target, "Documents", "raport.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(existing)!);
+        File.WriteAllText(existing, "old");
+
+        var preview = ProfilePackage.PreviewRestore(verification, Folders(target), RestoreConflictMode.Skip);
+
+        Assert.Equal(1, preview.ExistingFiles);
+        Assert.Equal(3, preview.ExistingBytes);
+        Assert.Equal(1, preview.SkippedFiles);
+        Assert.Equal(2, preview.FilesToWrite);
+        Assert.Equal(verification.Manifest.TotalBytes - 6, preview.BytesToWrite);
+        Assert.Equal(preview.BytesToWrite, preview.BytesByVolume.Values.Sum());
+        Assert.Equal("old", File.ReadAllText(existing));
+        Assert.False(File.Exists(Path.Combine(target, "Desktop", "notatka.txt")));
+
+        var overwritePreview = ProfilePackage.PreviewRestore(verification, Folders(target), RestoreConflictMode.Overwrite);
+        Assert.Equal(3, overwritePreview.FilesToWrite);
+        Assert.Equal(verification.Manifest.TotalBytes, overwritePreview.BytesToWrite);
+        Assert.Equal(1, overwritePreview.ExistingFiles);
+        Assert.Equal(0, overwritePreview.SkippedFiles);
+    }
+
+    [Fact]
     public void EncryptedPackageRequiresCorrectPasswordAndHidesContent()
     {
         var source = CreateSource();

@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "O filtro ignorará {0} arquivos maiores que 1 GiB ({1}). Eles não estarão disponíveis para restauração. Continuar?",
   "Nie można ustalić dysku docelowego.": "Não é possível determinar a unidade de destino.",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "Não foi possível verificar o espaço livre no disco: {0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "Unidade {0}: necessários {1}, disponíveis {2}",
   "Za mało wolnego miejsca": "Espaço livre insuficiente",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "O tamanho estimado dos dados ({0}) excede o espaço livre no disco ({1}). O pacote pode ficar menor após a compressão. Continuar?",
   "Pakowanie": "Empacotando",

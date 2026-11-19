@@ -417,11 +417,44 @@ public partial class ProfileBackupView : UserControl
             return;
         }
         var manifest = verification.Manifest;
+        ProfileRestorePreview? restorePreview = null;
+        var previewOk = await _runner.RunCancellableAsync(LogEvent.ProfileBackup, L.T("Weryfikacja"),
+            async token => restorePreview = await Task.Run(
+                () => ProfilePackage.PreviewRestore(verification, targets, mode, token), token),
+            typeof(IOException), typeof(UnauthorizedAccessException), typeof(ProfilePackageException), typeof(ArgumentException));
+        if (!previewOk || restorePreview is null) return;
+
+        var spaceLines = new List<string>();
+        var insufficientSpace = false;
+        try
+        {
+            foreach (var (volume, requiredBytes) in restorePreview.BytesByVolume.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var availableBytes = new DriveInfo(volume).AvailableFreeSpace;
+                spaceLines.Add(L.F("Dysk {0}: wymagane {1}, dostępne {2}",
+                    volume, FormatSize(requiredBytes), FormatSize(availableBytes)));
+                insufficientSpace |= requiredBytes > availableBytes;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Ui.Error(this, L.T("Kopia profilu"), L.F("Nie udało się sprawdzić wolnego miejsca na dysku: {0}", ex.Message));
+            return;
+        }
+
         var where = string.Join("\n", targets.Where(t => manifest.Folders.Contains(t.Key)).Select(t => $"• {UserProfiles.Find(t.Key)!.Name}: {t.Path}"));
+        var previewText = L.T("Plików") + ": " + restorePreview.FilesToWrite + "\n" +
+                          L.T("Rozmiar danych") + ": " + FormatSize(restorePreview.BytesToWrite) + "\n" +
+                          L.F("Istniejące pliki: {0}", $"{restorePreview.ExistingFiles} ({FormatSize(restorePreview.ExistingBytes)})") +
+                          (spaceLines.Count > 0 ? "\n" + string.Join("\n", spaceLines) : "");
+        if (insufficientSpace &&
+            !Ui.Confirm(this, L.T("Za mało wolnego miejsca"),
+                previewText + "\n\n" + L.T("Kontynuować?"), warning: true))
+            return;
         if (!Ui.Confirm(this, L.T("Przywróć z paczki"),
                 L.F("Przywrócić {0} plików ({1}) z komputera {2} (użytkownik {3})?", manifest.Files.Count, FormatSize(manifest.TotalBytes),
                     manifest.Machine, manifest.UserName) + "\n\n" + L.F("Cel: {0}", targetDescription) + "\n" + where + "\n\n" +
-                L.F("Istniejące pliki: {0}", ((RestoreConflictOption)ConflictBox.SelectedItem).Name)))
+                previewText + "\n\n" + L.F("Istniejące pliki: {0}", ((RestoreConflictOption)ConflictBox.SelectedItem).Name)))
             return;
 
         var progress = StatusProgress(L.T("Przywracanie"));

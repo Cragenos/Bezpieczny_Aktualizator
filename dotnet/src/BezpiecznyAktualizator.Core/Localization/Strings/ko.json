@@ -892,6 +892,7 @@
   "Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?": "필터가 1GiB보다 큰 파일 {0}개를 건너뜁니다({1}). 해당 파일은 복원할 수 없습니다. 계속하시겠습니까?",
   "Nie można ustalić dysku docelowego.": "대상 드라이브를 확인할 수 없습니다.",
   "Nie udało się sprawdzić wolnego miejsca na dysku: {0}": "디스크의 여유 공간을 확인할 수 없습니다: {0}",
+  "Dysk {0}: wymagane {1}, dostępne {2}": "드라이브 {0}: 필요 {1}, 사용 가능 {2}",
   "Za mało wolnego miejsca": "여유 공간이 부족합니다",
   "Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?": "예상 데이터 크기({0})가 디스크 여유 공간({1})을 초과합니다. 압축 후 패키지는 더 작을 수 있습니다. 계속하시겠습니까?",
   "Pakowanie": "패키징",
