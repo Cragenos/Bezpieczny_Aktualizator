@@ -45,7 +45,8 @@ public enum RestoreConflictMode
     KeepBoth,
 }
 
-public sealed record ProfileRestoreResult(int Restored, int Skipped, int BackedUp, int Renamed, string? BackupFolder, IReadOnlyList<string> Problems);
+public sealed record ProfileRestoreResult(int Restored, int Skipped, int BackedUp, int Renamed, string? BackupFolder,
+                                          IReadOnlyList<string> Problems, bool Canceled = false);
 
 public sealed record ProfileRestorePreview(int FilesToWrite, long BytesToWrite, int ExistingFiles, long ExistingBytes,
                                            int SkippedFiles, IReadOnlyDictionary<string, long> BytesByVolume);
@@ -318,9 +319,14 @@ public static class ProfilePackage
         long done = 0;
         var lastReport = DateTime.MinValue;
         var backupUsed = false;
+        var canceled = false;
         foreach (var file in manifest.Files)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                canceled = true;
+                break;
+            }
             count++;
             done += file.Size;
             var separator = file.Path.IndexOf('/');
@@ -386,13 +392,13 @@ public static class ProfilePackage
                 Extract(package.Zip.GetEntry(FilesPrefix + file.Path)!, file, destination, cancellationToken);
                 restored++;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 var rollbackError = RestoreOriginal();
                 if (rollbackError is not null)
                     throw new ProfilePackageException(L.F("Nie przywrócono {0}: {1}", file.Path,
                         $"{backupPath}: {rollbackError.Message}"));
-                throw;
+                canceled = true;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ProfilePackageException)
             {
@@ -402,13 +408,15 @@ public static class ProfilePackage
                     : $"{ex.Message}; {backupPath}: {rollbackError.Message}";
                 problems.Add(L.F("Nie przywrócono {0}: {1}", file.Path, message));
             }
+            if (canceled) break;
             if (progress is not null && (DateTime.UtcNow - lastReport).TotalMilliseconds >= 200)
             {
                 lastReport = DateTime.UtcNow;
                 progress.Report(new ProfilePackageProgress(done, manifest.TotalBytes, count, manifest.Files.Count, file.Path));
             }
         }
-        return new ProfileRestoreResult(restored, skipped, backedUp, renamed, backupUsed ? backupRoot : null, problems);
+        canceled |= cancellationToken.IsCancellationRequested;
+        return new ProfileRestoreResult(restored, skipped, backedUp, renamed, backupUsed ? backupRoot : null, problems, canceled);
     }
 
     private static void Extract(ZipArchiveEntry entry, ProfileFileEntry file, string destination, CancellationToken cancellationToken)

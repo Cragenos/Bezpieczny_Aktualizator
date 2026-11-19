@@ -337,6 +337,50 @@ public sealed class ProfilePackageTests : IDisposable
         Assert.False(File.Exists(Path.Combine(backup, "Documents", "raport.txt")));
     }
 
+    [Fact]
+    public void CanceledRestoreReturnsPartialResultAndBackupLocation()
+    {
+        var source = CreateSource();
+        var package = PathOf("profil" + ProfilePackage.Extension);
+        ProfilePackage.Create(Folders(source), package, "jan", source);
+        var verification = ProfilePackage.Verify(package);
+        var firstFile = verification.Manifest.Files[0];
+        var separator = firstFile.Path.IndexOf('/');
+        var key = firstFile.Path[..separator];
+        var relative = firstFile.Path[(separator + 1)..];
+        var target = PathOf("dst");
+        var existing = Path.Combine(target, key, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(existing)!);
+        File.WriteAllText(existing, "old");
+        var backup = PathOf("backup");
+        using var cancellation = new CancellationTokenSource();
+
+        var result = ProfilePackage.Restore(package, Folders(target), RestoreConflictMode.Overwrite, backup,
+            progress: new CancelAfterFirstRestoredFile(cancellation), cancellationToken: cancellation.Token);
+
+        Assert.True(result.Canceled);
+        Assert.Equal(1, result.Restored);
+        Assert.Equal(1, result.BackedUp);
+        Assert.Equal(backup, result.BackupFolder);
+        Assert.Equal("old", File.ReadAllText(Path.Combine(backup, key, relative.Replace('/', Path.DirectorySeparatorChar))));
+        Assert.Equal(File.ReadAllBytes(Path.Combine(source, key, relative.Replace('/', Path.DirectorySeparatorChar))),
+            File.ReadAllBytes(existing));
+    }
+
+    private sealed class CancelAfterFirstRestoredFile(CancellationTokenSource cancellation) : IProgress<ProfilePackageProgress>
+    {
+        private bool _verificationComplete;
+
+        public void Report(ProfilePackageProgress progress)
+        {
+            if (_verificationComplete && progress.FilesDone == 1)
+                cancellation.Cancel();
+            if (progress.FilesDone == progress.FilesTotal)
+                _verificationComplete = true;
+            Thread.Sleep(210);
+        }
+    }
+
     private static void WriteCraftedPackage(string package, string path, string content, bool includeManifestEntry)
     {
         var bytes = Encoding.UTF8.GetBytes(content);

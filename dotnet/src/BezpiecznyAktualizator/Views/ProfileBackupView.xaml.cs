@@ -462,16 +462,19 @@ public partial class ProfileBackupView : UserControl
         var ok = await _runner.RunCancellableAsync(LogEvent.ProfileBackup, L.F("Przywracanie paczki {0}...", Path.GetFileName(path)),
             async token => result = await Task.Run(() => ProfilePackage.Restore(path, targets, mode, backupRoot, password, progress, token), token),
             typeof(IOException), typeof(UnauthorizedAccessException), typeof(ProfilePackageException));
-        if (!ok || result is null) return;
+        if (result is null) return;
         foreach (var problem in result.Problems.Take(100)) _runner.Log(problem, SyslogSeverity.Warning);
-        _lastSummary = L.F("Przywrócono plików: {0}, pominięto: {1}, z nową nazwą: {2}, przeniesiono do kopii: {3}, błędy: {4}.",
-                           result.Restored, result.Skipped, result.Renamed, result.BackedUp, result.Problems.Count);
-        _runner.Log(_lastSummary, result.Problems.Count == 0 ? SyslogSeverity.Notice : SyslogSeverity.Warning);
+        var canceled = result.Canceled || !ok;
+        var summary = L.F("Przywrócono plików: {0}, pominięto: {1}, z nową nazwą: {2}, przeniesiono do kopii: {3}, błędy: {4}.",
+                          result.Restored, result.Skipped, result.Renamed, result.BackedUp, result.Problems.Count);
+        _lastSummary = canceled ? L.F("Anulowano: {0}", summary) : summary;
+        _runner.Log(_lastSummary, canceled || result.Problems.Count > 0 ? SyslogSeverity.Warning : SyslogSeverity.Notice);
         if (result.BackupFolder is { } backup) _runner.Log(L.F("Zastąpione pliki zachowano w: {0}", backup), SyslogSeverity.Notice);
         _runner.UpdateSummary();
         RestorePassword.Clear();
         var message = _lastSummary + (result.BackupFolder is { } b ? "\n\n" + L.F("Zastąpione pliki zachowano w: {0}", b) : "");
-        if (result.Problems.Count > 0) Ui.Warn(this, L.T("Przywróć z paczki"), message + "\n\n" + L.T("Szczegóły w zakładce „Dziennik”."));
+        if (canceled || result.Problems.Count > 0)
+            Ui.Warn(this, L.T("Przywróć z paczki"), message + (result.Problems.Count > 0 ? "\n\n" + L.T("Szczegóły w zakładce „Dziennik”.") : ""));
         else Ui.Info(this, L.T("Przywróć z paczki"), message);
     }
 }
