@@ -338,6 +338,27 @@ public static class ProfilePackage
                 skipped++;
                 continue;
             }
+            string? backupPath = null;
+            var originalMovedToBackup = false;
+
+            Exception? RestoreOriginal()
+            {
+                if (!originalMovedToBackup || backupPath is null || File.Exists(destination) || Directory.Exists(destination))
+                    return null;
+                try
+                {
+                    File.Move(backupPath, destination);
+                    backedUp--;
+                    backupUsed = backedUp > 0;
+                    originalMovedToBackup = false;
+                    return null;
+                }
+                catch (Exception rollbackException) when (rollbackException is IOException or UnauthorizedAccessException)
+                {
+                    return rollbackException;
+                }
+            }
+
             try
             {
                 if (File.Exists(destination) || Directory.Exists(destination))
@@ -354,9 +375,10 @@ public static class ProfilePackage
                     }
                     else
                     {
-                        var backup = SafeCombine(Path.Combine(backupRoot, key), relative);
-                        Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
-                        File.Move(destination, UniqueName(backup));
+                        backupPath = UniqueName(SafeCombine(Path.Combine(backupRoot, key), relative));
+                        Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
+                        File.Move(destination, backupPath);
+                        originalMovedToBackup = true;
                         backupUsed = true;
                         backedUp++;
                     }
@@ -364,9 +386,21 @@ public static class ProfilePackage
                 Extract(package.Zip.GetEntry(FilesPrefix + file.Path)!, file, destination, cancellationToken);
                 restored++;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (OperationCanceledException)
             {
-                problems.Add(L.F("Nie przywrócono {0}: {1}", file.Path, ex.Message));
+                var rollbackError = RestoreOriginal();
+                if (rollbackError is not null)
+                    throw new ProfilePackageException(L.F("Nie przywrócono {0}: {1}", file.Path,
+                        $"{backupPath}: {rollbackError.Message}"));
+                throw;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ProfilePackageException)
+            {
+                var rollbackError = RestoreOriginal();
+                var message = rollbackError is null
+                    ? ex.Message
+                    : $"{ex.Message}; {backupPath}: {rollbackError.Message}";
+                problems.Add(L.F("Nie przywrócono {0}: {1}", file.Path, message));
             }
             if (progress is not null && (DateTime.UtcNow - lastReport).TotalMilliseconds >= 200)
             {

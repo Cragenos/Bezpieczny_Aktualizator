@@ -315,6 +315,28 @@ public sealed class ProfilePackageTests : IDisposable
         }
     }
 
+    [Fact]
+    public void FailedOverwriteRestoresOriginalFileFromBackup()
+    {
+        var source = CreateSource();
+        var package = PathOf("profil" + ProfilePackage.Extension);
+        ProfilePackage.Create(Folders(source), package, "jan", source);
+        var target = PathOf("dst");
+        var existing = Path.Combine(target, "Documents", "raport.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(existing)!);
+        File.WriteAllText(existing, "lokalna wersja");
+        Directory.CreateDirectory(existing + ".partial");
+        var backup = PathOf("backup");
+
+        var result = ProfilePackage.Restore(package, Folders(target), RestoreConflictMode.Overwrite, backup);
+
+        Assert.Equal("lokalna wersja", File.ReadAllText(existing));
+        Assert.Equal(0, result.BackedUp);
+        Assert.Null(result.BackupFolder);
+        Assert.Contains(result.Problems, problem => problem.Contains("raport.txt"));
+        Assert.False(File.Exists(Path.Combine(backup, "Documents", "raport.txt")));
+    }
+
     private static void WriteCraftedPackage(string package, string path, string content, bool includeManifestEntry)
     {
         var bytes = Encoding.UTF8.GetBytes(content);
