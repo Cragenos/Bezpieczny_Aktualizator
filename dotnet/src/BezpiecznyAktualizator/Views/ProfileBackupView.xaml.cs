@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using BezpiecznyAktualizator.Core.Localization;
@@ -106,6 +105,15 @@ public partial class ProfileBackupView : UserControl
         (FolderList.ItemsSource as IEnumerable<ProfileFolderOption> ?? [])
             .Where(o => o.IsChecked).Select(o => new ProfileFolderPath(o.Folder.Key, o.Path)).ToList();
 
+    private long? MaxFileSize => SkipLargeFiles.IsChecked == true ? ProfilePackage.LargeFileThreshold : null;
+
+    private static string EstimateSummary(ProfileEstimate estimate) =>
+        L.F("Plików: {0}, rozmiar przed kompresją: {1}.", estimate.Files, FormatSize(estimate.Bytes)) +
+        (estimate.SkippedLinks > 0 ? " " + L.F("Pominięte dowiązania: {0}.", estimate.SkippedLinks) : "") +
+        (estimate.SkippedLargeFiles > 0
+            ? " " + L.F("Pominięte duże pliki: {0} ({1}).", estimate.SkippedLargeFiles, FormatSize(estimate.SkippedLargeBytes))
+            : "");
+
     private void SourceUser_Changed(object sender, SelectionChangedEventArgs e) => LoadFolders();
 
     private void Folder_Changed(object sender, RoutedEventArgs e) => EstimateText.Text = "";
@@ -176,12 +184,12 @@ public partial class ProfileBackupView : UserControl
             return;
         }
         ProfileEstimate? estimate = null;
+        var maxFileSize = MaxFileSize;
         await _runner.RunCancellableAsync(LogEvent.ProfileBackup, L.F("Szacowanie rozmiaru folderów użytkownika {0}...", profile.UserName),
-            async token => estimate = await Task.Run(() => ProfilePackage.Estimate(folders, token), token),
+            async token => estimate = await Task.Run(() => ProfilePackage.Estimate(folders, token, maxFileSize), token),
             typeof(IOException), typeof(UnauthorizedAccessException));
         if (estimate is null) return;
-        EstimateText.Text = L.F("Plików: {0}, rozmiar przed kompresją: {1}.", estimate.Files, FormatSize(estimate.Bytes)) +
-                            (estimate.SkippedLinks > 0 ? " " + L.F("Pominięte dowiązania: {0}.", estimate.SkippedLinks) : "");
+        EstimateText.Text = EstimateSummary(estimate);
         _runner.Log(EstimateText.Text);
         foreach (var missing in estimate.MissingFolders) _runner.Log(L.F("Folder nie istnieje: {0}", missing), SyslogSeverity.Notice);
     }
@@ -220,6 +228,39 @@ public partial class ProfileBackupView : UserControl
         };
         if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
         var output = dialog.FileName;
+        ProfileEstimate? estimate = null;
+        var maxFileSize = MaxFileSize;
+        var estimateOk = await _runner.RunCancellableAsync(LogEvent.ProfileBackup,
+            L.F("Szacowanie rozmiaru folderów użytkownika {0}...", profile.UserName),
+            async token => estimate = await Task.Run(() => ProfilePackage.Estimate(folders, token, maxFileSize), token),
+            typeof(IOException), typeof(UnauthorizedAccessException));
+        if (!estimateOk || estimate is null) return;
+        EstimateText.Text = EstimateSummary(estimate);
+        _runner.Log(EstimateText.Text);
+
+        if (estimate.SkippedLargeFiles > 0 &&
+            !Ui.Confirm(this, L.T("Pominięte duże pliki"),
+                L.F("Filtr pominie {0} plików większych niż 1 GiB ({1}). Nie będą dostępne do przywrócenia. Kontynuować?",
+                    estimate.SkippedLargeFiles, FormatSize(estimate.SkippedLargeBytes)), warning: true))
+            return;
+
+        long availableSpace;
+        try
+        {
+            var root = Path.GetPathRoot(output);
+            if (string.IsNullOrEmpty(root)) throw new IOException(L.T("Nie można ustalić dysku docelowego."));
+            availableSpace = new DriveInfo(root).AvailableFreeSpace;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Ui.Error(this, L.T("Kopia profilu"), L.F("Nie udało się sprawdzić wolnego miejsca na dysku: {0}", ex.Message));
+            return;
+        }
+        if (estimate.Bytes > availableSpace &&
+            !Ui.Confirm(this, L.T("Za mało wolnego miejsca"),
+                L.F("Szacowany rozmiar danych ({0}) przekracza wolne miejsce na dysku ({1}). Paczka może być mniejsza po kompresji. Kontynuować?",
+                    FormatSize(estimate.Bytes), FormatSize(availableSpace)), warning: true))
+            return;
         var progress = StatusProgress(L.T("Pakowanie"));
         ProfilePackageResult? result = null;
         string? hash = null;
@@ -228,40 +269,41 @@ public partial class ProfileBackupView : UserControl
             async token =>
             {
                 result = await Task.Run(() => ProfilePackage.Create(folders, output, profile.UserName, profile.ProfilePath,
-                                                                    password.Length > 0 ? password : null, progress, token), token);
-                hash = await Task.Run(() =>
-                {
-                    using var file = File.OpenRead(output);
-                    return Convert.ToHexStringLower(SHA256.HashData(file));
-                }, token);
+                                                                    password.Length > 0 ? password : null, progress, token, estimate), token);
+                hash = await Task.Run(() => ProfilePackage.ComputeSha256(output), token);
             },
             typeof(IOException), typeof(UnauthorizedAccessException), typeof(ProfilePackageException));
         if (!ok || result is null) return;
         foreach (var line in result.Skipped.Take(100)) _runner.Log(line, SyslogSeverity.Notice);
         if (result.Skipped.Count > 100) _runner.Log(L.F("… i {0} innych pominiętych elementów.", result.Skipped.Count - 100), SyslogSeverity.Notice);
-        var size = new FileInfo(output).Length;
+        var size = result.Parts.Sum(part => new FileInfo(part).Length);
         _lastSummary = L.F("Utworzono paczkę: {0} plików, {1}.", result.Files, FormatSize(size));
         var details = new List<string>
         {
             _lastSummary,
             "",
         };
-        details.AddRange(Ui.FormatFields([
+        var detailFields = new List<(string Label, string Value)>
+        {
             (L.T("Plik"), output),
             (L.T("Rozmiar danych"), FormatSize(result.Bytes)),
             (L.T("Rozmiar paczki"), FormatSize(size)),
+            (L.T("Części paczki"), result.Parts.Count.ToString()),
             (L.T("Szyfrowanie"), password.Length > 0 ? "AES-256-GCM (PBKDF2-SHA256)" : L.T("brak")),
             (L.T("Pominięte elementy"), result.Skipped.Count.ToString()),
             ("SHA256", hash ?? ""),
-        ]));
+        };
+        if (estimate.SkippedLargeFiles > 0)
+            detailFields.Add((L.T("Pominięte duże pliki"), $"{estimate.SkippedLargeFiles} ({FormatSize(estimate.SkippedLargeBytes)})"));
+        details.AddRange(Ui.FormatFields(detailFields));
         Details.Text = string.Join(Environment.NewLine, details);
         BottomTabs.SelectedIndex = 0;
-        _runner.Log(L.F("Paczka zapisana: {0} (SHA256 {1}).", output, hash), SyslogSeverity.Notice);
+        _runner.Log(L.F("Paczka zapisana: {0}; części: {1}; SHA256 {2}.", output, result.Parts.Count, hash), SyslogSeverity.Notice);
         _runner.UpdateSummary();
         CreatePassword.Clear();
         CreatePasswordRepeat.Clear();
         Ui.Info(this, L.T("Kopia profilu"), _lastSummary + "\n\n" +
-                L.T("Przenieś plik na drugi komputer, uruchom tam Bezpieczny Aktualizator i użyj „Przywróć z paczki”."));
+                L.T("Przenieś wszystkie części paczki na drugi komputer, uruchom program i wybierz pierwszy plik .baprofile."));
     }
 
     private void BrowsePackage_Click(object sender, RoutedEventArgs e)

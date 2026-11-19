@@ -28,6 +28,7 @@ public static partial class WingetClient
     private static string? _cachedExecutable;
     internal delegate Task<(int Code, string Output)> CommandRunner(IReadOnlyList<string> args, CancellationToken ct);
     internal const int SourceCacheMissingCode = unchecked((int)0x80071130);
+    public const int InstallerTypeMismatchCode = unchecked((int)0x8A15002B);
     private const int NoApplicationsFound = unchecked((int)0x8A150014);
 
     public static bool IsAvailable()
@@ -254,11 +255,14 @@ public static partial class WingetClient
             return new WingetPackage(At(0), At(1), At(2), At(3), At(4));
         }).ToList();
 
-    public static async Task<List<WingetPackage>> ListInstalledAsync(CancellationToken ct = default)
+    public static Task<List<WingetPackage>> ListInstalledAsync(CancellationToken ct = default) =>
+        ListInstalledCoreAsync((args, token) => RunAsync(args, ct: token), ct);
+
+    internal static async Task<List<WingetPackage>> ListInstalledCoreAsync(CommandRunner run, CancellationToken ct = default)
     {
-        var (code, output) = await RunAsync(["list", .. CommonArgs], ct: ct);
+        var (code, output) = await run(["list", .. CommonArgs], ct);
         var packages = RowsToPackages(ParseTable(output));
-        if (code != 0 && packages.Count == 0)
+        if (code != 0 && code != NoApplicationsFound && packages.Count == 0)
             throw new WingetException(L.F("winget list zakończył się kodem 0x{0:X8}:", code) + "\n" + output.Trim());
         return packages;
     }
@@ -274,14 +278,25 @@ public static partial class WingetClient
         var args = new List<string> { "list", "--id", packageId, "--exact" };
         if (source.Length > 0) args.AddRange(["--source", source]);
         args.AddRange(CommonArgs);
-        var (code, output) = await run(
-            args, ct);
+        var (code, output) = await run(args, ct);
         var packages = RowsToPackages(ParseTable(output))
             .Where(package => package.Id.Equals(packageId, StringComparison.OrdinalIgnoreCase) &&
                               // With --source, winget filters rows itself and omits the Source column.
                               (source.Length == 0 || package.Source.Length == 0 ||
                                package.Source.Equals(source, StringComparison.OrdinalIgnoreCase)))
             .ToList();
+        if (code != 0 && code != NoApplicationsFound)
+            throw new WingetException(L.F("winget list zakończył się kodem 0x{0:X8}:", code) + "\n" + output.Trim());
+        if (packages.Count == 0 && source.Length > 0)
+        {
+            // Some installed packages stop matching their original source after an installer-type change.
+            (code, output) = await run(["list", "--id", packageId, "--exact", .. CommonArgs], ct);
+            packages = RowsToPackages(ParseTable(output))
+                .Where(package => package.Id.Equals(packageId, StringComparison.OrdinalIgnoreCase) &&
+                                  (package.Source.Length == 0 ||
+                                   package.Source.Equals(source, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+        }
         if (code == NoApplicationsFound && packages.Count == 0) return null;
         if (code != 0)
             throw new WingetException(L.F("winget list zakończył się kodem 0x{0:X8}:", code) + "\n" + output.Trim());

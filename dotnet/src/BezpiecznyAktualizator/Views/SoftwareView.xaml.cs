@@ -17,6 +17,7 @@ using BezpiecznyAktualizator.Core.Scheduling;
 using BezpiecznyAktualizator.Core.Security;
 using BezpiecznyAktualizator.Core.Winget;
 using BezpiecznyAktualizator.Services;
+using Microsoft.Win32;
 
 namespace BezpiecznyAktualizator.Views;
 
@@ -1007,7 +1008,8 @@ public partial class SoftwareView : UserControl
                         else
                         {
                             unconfirmed.Add(s);
-                            _runner.Log(L.F("Nie udało się potwierdzić wersji {0}: {1}", s.Name, installed ?? version),
+                            _runner.Log(L.F("Nie udało się potwierdzić aktualizacji {0}: oczekiwano {1}, odczytano {2}.",
+                                s.Name, version, installed ?? L.T("Nieznany")),
                                 SyslogSeverity.Warning, LogEvent.Upgrade);
                         }
                     }
@@ -1031,6 +1033,13 @@ public partial class SoftwareView : UserControl
             summary += "\n" + L.F("Nie zainstalowano z powodu braku punktu przywracania: {0}", notStarted.Count) + "\n" +
                        string.Join("\n", notStarted.Select(b => "  • " + b.Name));
         Ui.Info(this, L.T("Zakończono"), summary + "\n\n" + L.T("Szczegóły w zakładce „Dziennik”."));
+        var installerTypeMismatch = failed.Where(r => r.Code == WingetClient.InstallerTypeMismatchCode)
+            .Select(r => r.Item.Name).ToList();
+        if (installerTypeMismatch.Count > 0 &&
+            Ui.Confirm(this, L.T("Niezgodny typ instalacji"),
+                L.F("WinGet wykrył niezgodny typ instalacji dla: {0}.\n\nAutomatyczne odinstalowanie jest wyłączone, ponieważ może usunąć dane lub ustawienia. Przed ręcznym odinstalowaniem wykonaj kopię ważnych danych i ustawień.\n\nOtworzyć Ustawienia systemu, aby odinstalować wskazane programy?",
+                    string.Join(", ", installerTypeMismatch)), warning: true))
+            Ui.OpenUrl("ms-settings:appsfeatures");
         await CheckUpdatesAsync();
     }
 
@@ -1058,13 +1067,13 @@ public partial class SoftwareView : UserControl
     /// albo null, gdy instalacja ma zostać wstrzymana.
     /// </summary>
     private async Task<VerifiedInstaller?> VerifyInstallerAsync(string name, string wingetId, string source, string version = "",
-                                                               string installedInstallerType = "")
+                                                               string installedInstallerType = "", CancellationToken cancellationToken = default)
     {
-        if (!await EnsureLocalManifestFilesEnabledAsync()) return null;
+        if (!await EnsureLocalManifestFilesEnabledAsync(cancellationToken)) return null;
         _runner.Log(L.F("Weryfikacja plików kontrolnych: {0} ({1})...", name, wingetId), SyslogSeverity.Informational, LogEvent.Verify);
         var result = await InstallerVerifier.VerifyAsync(wingetId, source,
                                                          text => Dispatcher.BeginInvoke(() => _runner.SetStatus($"{name}: {text}")),
-                                                         version: version, installedInstallerType: installedInstallerType);
+                                                         ct: cancellationToken, version: version, installedInstallerType: installedInstallerType);
         foreach (var c in result.Checks)
         {
             var (icon, severity) = c.Status switch
@@ -1128,9 +1137,9 @@ public partial class SoftwareView : UserControl
         return null;
     }
 
-    private async Task<bool> EnsureLocalManifestFilesEnabledAsync()
+    private async Task<bool> EnsureLocalManifestFilesEnabledAsync(CancellationToken cancellationToken = default)
     {
-        if (await WingetClient.IsLocalManifestFilesEnabledAsync()) return true;
+        if (await WingetClient.IsLocalManifestFilesEnabledAsync(cancellationToken)) return true;
         if (!Ui.Confirm(this, L.T("Weryfikacja plików kontrolnych"),
                 L.T("WinGet wymaga LocalManifestFiles, aby użyć lokalnego manifestu, który aplikacja pobrała i zweryfikowała. Włączenie tej opcji zmienia ustawienia WinGet dla całego konta i wymaga zgody administratora (UAC). Aplikacja uruchomi wyłącznie polecenie „winget settings --enable LocalManifestFiles”, a następnie ponownie sprawdzi ustawienie. Nie rozpocznie instalacji, jeśli weryfikacja się nie powiedzie. Kontynuować?"),
                 warning: true))
@@ -1140,7 +1149,7 @@ public partial class SoftwareView : UserControl
             return false;
         }
 
-        await WingetClient.EnableLocalManifestFilesElevatedAsync();
+        await WingetClient.EnableLocalManifestFilesElevatedAsync(cancellationToken);
         _runner.Log(L.T("Włączono LocalManifestFiles w WinGet; ustawienie zostało zweryfikowane."),
             SyslogSeverity.Notice, LogEvent.Verify);
         return true;
@@ -1301,6 +1310,186 @@ public partial class SoftwareView : UserControl
         ["lifecycle"] = s.Lifecycle?.State.ToString() ?? "",
         ["lifecycle_eol"] = s.Lifecycle?.EolFrom?.ToString("yyyy-MM-dd") ?? "",
     };
+
+    private void ExportApps_Click(object sender, RoutedEventArgs e)
+    {
+        var apps = _items
+            .Where(s => s.WingetDetected && !string.IsNullOrWhiteSpace(s.WingetId) &&
+                        string.Equals(s.WingetSource, "winget", StringComparison.OrdinalIgnoreCase) &&
+                        !s.WingetId.StartsWith(@"ARP\", StringComparison.OrdinalIgnoreCase) &&
+                        !s.WingetId.StartsWith(@"MSIX\", StringComparison.OrdinalIgnoreCase))
+            .Select(s => new AppTransferEntry(s.WingetId!, s.Name, "winget", s.Version))
+            .DistinctBy(s => s.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (apps.Count == 0)
+        {
+            Ui.Info(this, L.T("Lista aplikacji"), L.T("Najpierw przeskanuj komputer i sprawdź pakiety WinGet do eksportu."));
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            Title = L.T("Eksportuj listę aplikacji"),
+            FileName = $"Aplikacje-{Environment.MachineName}-{DateTime.Now:yyyyMMdd-HHmm}{AppTransferManifestFile.Extension}",
+            DefaultExt = AppTransferManifestFile.Extension,
+            AddExtension = true,
+            Filter = L.T("Lista aplikacji") + $" (*{AppTransferManifestFile.Extension})|*{AppTransferManifestFile.Extension}",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+        try
+        {
+            AppTransferManifestFile.Write(dialog.FileName, AppTransferManifestFile.Create(apps, Environment.MachineName));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Ui.Error(this, L.T("Lista aplikacji"), ex.Message);
+            return;
+        }
+        _runner.Log(L.F("Wyeksportowano listę aplikacji: {0} pakietów do {1}.", apps.Count, dialog.FileName),
+            msgId: LogEvent.Report);
+    }
+
+    private async void ImportApps_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = L.T("Importuj listę aplikacji"),
+            Filter = L.T("Lista aplikacji") + $" (*{AppTransferManifestFile.Extension})|*{AppTransferManifestFile.Extension}",
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
+
+        AppTransferManifest manifest;
+        try
+        {
+            manifest = AppTransferManifestFile.Read(dialog.FileName);
+        }
+        catch (InvalidDataException ex)
+        {
+            Ui.Error(this, L.T("Lista aplikacji"), ex.Message);
+            return;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Ui.Error(this, L.T("Lista aplikacji"), ex.Message);
+            return;
+        }
+
+        List<WingetPackage>? installed = null;
+        var scanOk = await _runner.RunCancellableAsync(LogEvent.Scan, L.T("Sprawdzanie zainstalowanych pakietów WinGet..."),
+            async token => installed = await WingetClient.ListInstalledAsync(token), typeof(WingetException));
+        if (!scanOk || installed is null) return;
+        var installedIds = installed.Where(p => !p.IsLocalOnly).Select(p => p.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missing = manifest.Apps.Where(app => !installedIds.Contains(app.Id)).ToList();
+        if (missing.Count == 0)
+        {
+            Ui.Info(this, L.T("Import aplikacji"),
+                L.F("Wszystkie {0} pakiety z listy komputera {1} są już zainstalowane.", manifest.Apps.Count, manifest.Machine));
+            return;
+        }
+
+        var preview = L.F("Lista z komputera {0}: {1} pakietów; już zainstalowane: {2}; do zainstalowania: {3}.",
+            manifest.Machine, manifest.Apps.Count, manifest.Apps.Count - missing.Count, missing.Count) + "\n\n" +
+            string.Join("\n", missing.Take(20).Select(app => $"• {app.Name} [{app.Id}]")) +
+            (missing.Count > 20 ? "\n" + L.F("… i {0} kolejnych.", missing.Count - 20) : "") +
+            "\n\n" + L.T("Plik listy nie jest podpisany. Przejrzyj pełną listę przed importem.") +
+            "\n\n" + L.T("Instalacja użyje wyłącznie źródła winget i przejdzie weryfikację instalatora oraz kontrolę polityk. Kontynuować?");
+        if (!Ui.Confirm(this, L.T("Potwierdź import aplikacji"), preview, warning: true)) return;
+
+        var installedCount = 0;
+        var installCommandSucceeded = false;
+        var ok = await _runner.RunCancellableAsync(LogEvent.Upgrade,
+            L.F("Instalowanie {0} aplikacji z przeniesionej listy...", missing.Count),
+            async token =>
+            {
+                bool? backupReady = null;
+                foreach (var app in missing)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var software = new Software
+                    {
+                        Name = app.Name,
+                        Version = app.Version,
+                        WingetId = app.Id,
+                        WingetSource = app.Source,
+                        WingetDetected = true,
+                    };
+                    var policies = Settings.LoadPolicies(out var policyError);
+                    if (policyError is not null)
+                        throw new WingetException(L.F("Nie można wczytać zasad komputera. Instalowanie zablokowane: {0}", policyError));
+                    if (policies.ManualRequireTrusted)
+                    {
+                        try
+                        {
+                            await SoftwareAssessor.AssessSoftwareAsync(software, VerifyTls.IsChecked == true, token);
+                        }
+                        catch (WingetException ex)
+                        {
+                            software.SecurityLevel = "?";
+                            software.SecurityReport = ex.Message;
+                        }
+                    }
+                    policies = Settings.LoadPolicies(out policyError);
+                    if (policyError is not null)
+                        throw new WingetException(L.F("Nie można wczytać zasad komputera. Instalowanie zablokowane: {0}", policyError));
+                    var decision = policies.Evaluate(software, automatic: false, DateTimeOffset.Now);
+                    if (!decision.Allowed)
+                    {
+                        _runner.Log(L.F("Pominięto {0}: {1}", app.Name, decision.Reason.ToString()),
+                            SyslogSeverity.Notice, LogEvent.Policy);
+                        continue;
+                    }
+
+                    _runner.SetStatus(L.F("Weryfikacja plików kontrolnych: {0}...", app.Name));
+                    var verified = await VerifyInstallerAsync(app.Name, app.Id, app.Source, cancellationToken: token);
+                    if (verified is null) continue;
+                    var expectedVersion = verified.Version;
+                    var sha256 = verified.Sha256;
+                    using (verified)
+                    {
+                        backupReady ??= await InstallBackup.EnsureAsync(this, RestorePointPurpose.Software, _runner.Log);
+                        if (backupReady == false) break;
+                        _runner.Log(L.F("Instalowanie {0} ({1})...", app.Name, app.Id), SyslogSeverity.Notice);
+                        var code = await WingetClient.InstallVerifiedAsync(verified, line => UiLog("  " + line), ct: token);
+                        if (code != 0)
+                        {
+                            _runner.Log(L.F("Niepowodzenie instalacji {0} (kod 0x{1:X8}).", app.Name, code),
+                                SyslogSeverity.Error, LogEvent.Upgrade);
+                            continue;
+                        }
+                        installCommandSucceeded = true;
+                    }
+
+                    string? actualVersion = null;
+                    try
+                    {
+                        actualVersion = await WingetClient.InstalledVersionAsync(app.Id, app.Source, token);
+                    }
+                    catch (WingetException ex)
+                    {
+                        _runner.Log(L.F("Nie udało się potwierdzić instalacji {0}: {1}", app.Name, ex.Message),
+                            SyslogSeverity.Warning, LogEvent.Upgrade);
+                    }
+                    if (UpdateHistory.IsUpgradeVersionConfirmed(actualVersion, expectedVersion, ""))
+                    {
+                        installedCount++;
+                        _runner.Log(L.F("Zainstalowano i potwierdzono {0} {1} (SHA256 {2}).", app.Name, actualVersion, sha256),
+                            SyslogSeverity.Notice, LogEvent.Upgrade);
+                    }
+                    else
+                    {
+                        _runner.Log(L.F("Nie udało się potwierdzić wersji po instalacji {0}: oczekiwano {1}, odczytano {2}.",
+                            app.Name, expectedVersion, actualVersion ?? L.T("Nieznany")), SyslogSeverity.Warning, LogEvent.Upgrade);
+                    }
+                }
+            },
+            typeof(WingetException), typeof(IOException), typeof(UnauthorizedAccessException));
+        if (installCommandSucceeded) await ScanAsync(checkUpdates: false);
+        if (ok)
+            Ui.Info(this, L.T("Import aplikacji"),
+                L.F("Zainstalowano i potwierdzono {0} z {1} brakujących aplikacji. Szczegóły pozostałych są w dzienniku.",
+                    installedCount, missing.Count));
+    }
 
     private void Export_Click(object sender, RoutedEventArgs e)
     {

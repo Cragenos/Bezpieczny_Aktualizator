@@ -22,6 +22,17 @@ public sealed class ProfilePackageTests : IDisposable
 
     private string PathOf(params string[] parts) => Path.Combine([_root.FullName, .. parts]);
 
+    private static byte[] Concatenate(IEnumerable<string> paths)
+    {
+        using var output = new MemoryStream();
+        foreach (var path in paths)
+        {
+            using var input = File.OpenRead(path);
+            input.CopyTo(output);
+        }
+        return output.ToArray();
+    }
+
     private string CreateSource()
     {
         var desktop = Directory.CreateDirectory(PathOf("src", "Desktop"));
@@ -97,6 +108,55 @@ public sealed class ProfilePackageTests : IDisposable
 
         Assert.Equal(4, result.Restored);
         Assert.Equal(big, File.ReadAllBytes(Path.Combine(target, "Documents", "duzy.bin")));
+    }
+
+    [Fact]
+    public void EncryptedPackageCanBeSplitAcrossPortablePartsAndRestored()
+    {
+        var source = CreateSource();
+        var payload = RandomNumberGenerator.GetBytes(160_000);
+        File.WriteAllBytes(Path.Combine(source, "Documents", "payload.bin"), payload);
+        var package = PathOf("podzielona" + ProfilePackage.Extension);
+
+        var created = ProfilePackage.CreateCore(Folders(source), package, "jan", source, "bezpieczne-haslo",
+            progress: null, cancellationToken: default, maxPartBytes: 16_384);
+
+        Assert.True(created.Parts.Count > 2);
+        Assert.All(created.Parts, part => Assert.True(new FileInfo(part).Length <= 16_384));
+        Assert.Equal(created.Parts, ProfilePackage.GetPackageParts(package));
+        Assert.True(ProfilePackage.IsEncrypted(package));
+        Assert.True(ProfilePackage.Verify(package, "bezpieczne-haslo").Succeeded);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Concatenate(created.Parts))),
+            ProfilePackage.ComputeSha256(package));
+
+        var target = PathOf("dst");
+        var restored = ProfilePackage.Restore(package, Folders(target), RestoreConflictMode.Skip,
+            PathOf("backup"), "bezpieczne-haslo");
+        Assert.Equal(payload, File.ReadAllBytes(Path.Combine(target, "Documents", "payload.bin")));
+        Assert.Equal(created.Files, restored.Restored);
+    }
+
+    [Fact]
+    public void OptionalLargeFileFilterIsAppliedToEstimateAndPackage()
+    {
+        var source = CreateSource();
+        var largeFile = Path.Combine(source, "Documents", "large.bin");
+        File.WriteAllBytes(largeFile, new byte[2048]);
+        var folders = Folders(source);
+        var estimate = ProfilePackage.Estimate(folders, maxFileSize: 1024);
+
+        Assert.Equal(3, estimate.Files);
+        Assert.Equal(1, estimate.SkippedLargeFiles);
+        Assert.Equal(2048L, estimate.SkippedLargeBytes);
+        Assert.Equal(1024L, estimate.MaxFileSize);
+
+        var package = PathOf("filtered" + ProfilePackage.Extension);
+        var created = ProfilePackage.Create(folders, package, "jan", source, estimate: estimate);
+        var verification = ProfilePackage.Verify(package);
+
+        Assert.Equal(3, created.Files);
+        Assert.Contains(created.Skipped, item => item.Contains("large.bin"));
+        Assert.DoesNotContain(verification.Manifest.Files, file => file.Path.EndsWith("large.bin", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -487,7 +487,8 @@ public static class ScheduledRunner
                 else
                 {
                     result.Failed.Add(label);
-                    Syslog.Warning(LogEvent.Upgrade, L.F("Nie udało się potwierdzić wersji {0}: {1}", s.Name, confirmedVersion ?? verification.Version));
+                    Syslog.Warning(LogEvent.Upgrade, L.F("Nie udało się potwierdzić aktualizacji {0}: oczekiwano {1}, odczytano {2}.",
+                        s.Name, verification.Version, confirmedVersion ?? L.T("Nieznany")));
                 }
             }
             else

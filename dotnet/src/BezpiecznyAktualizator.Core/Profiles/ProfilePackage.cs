@@ -25,9 +25,10 @@ public sealed record ProfilePackageManifest(int FormatVersion, DateTimeOffset Cr
     public long TotalBytes => Files.Sum(f => f.Size);
 }
 
-public sealed record ProfileEstimate(int Files, long Bytes, int SkippedLinks, IReadOnlyList<string> MissingFolders);
+public sealed record ProfileEstimate(int Files, long Bytes, int SkippedLinks, IReadOnlyList<string> MissingFolders,
+                                     long? MaxFileSize = null, int SkippedLargeFiles = 0, long SkippedLargeBytes = 0);
 
-public sealed record ProfilePackageResult(int Files, long Bytes, IReadOnlyList<string> Skipped);
+public sealed record ProfilePackageResult(int Files, long Bytes, IReadOnlyList<string> Skipped, IReadOnlyList<string> Parts);
 
 public sealed record ProfileVerification(ProfilePackageManifest Manifest, bool Encrypted, IReadOnlyList<string> Problems)
 {
@@ -56,6 +57,8 @@ public static class ProfilePackage
 {
     public const string Extension = ".baprofile";
     public const int FormatVersion = 1;
+    public const long MaxPartBytes = 3_900_000_000;
+    public const long LargeFileThreshold = 1_073_741_824;
     private const string FormatName = "BezpiecznyAktualizator.ProfilePackage";
     private const string ManifestEntry = "manifest.json";
     private const string FilesPrefix = "files/";
@@ -70,11 +73,15 @@ public static class ProfilePackage
         ExcludedExtensions.Any(e => fileName.EndsWith(e, StringComparison.OrdinalIgnoreCase)) ||
         fileName.EndsWith(Extension + ".partial", StringComparison.OrdinalIgnoreCase);
 
-    public static ProfileEstimate Estimate(IReadOnlyList<ProfileFolderPath> folders, CancellationToken cancellationToken = default)
+    public static ProfileEstimate Estimate(IReadOnlyList<ProfileFolderPath> folders, CancellationToken cancellationToken = default,
+                                           long? maxFileSize = null)
     {
+        if (maxFileSize is <= 0) throw new ArgumentOutOfRangeException(nameof(maxFileSize));
         var files = 0;
         long bytes = 0;
         var links = 0;
+        var skippedLargeFiles = 0;
+        long skippedLargeBytes = 0;
         var missing = new List<string>();
         foreach (var folder in folders)
         {
@@ -86,42 +93,60 @@ public static class ProfilePackage
             foreach (var item in Enumerate(folder, null, cancellationToken))
             {
                 if (item.File is null) { links++; continue; }
+                if (maxFileSize is long limit && item.File.Length > limit)
+                {
+                    skippedLargeFiles++;
+                    skippedLargeBytes += item.File.Length;
+                    continue;
+                }
                 files++;
                 bytes += item.File.Length;
             }
         }
-        return new ProfileEstimate(files, bytes, links, missing);
+        return new ProfileEstimate(files, bytes, links, missing, maxFileSize, skippedLargeFiles, skippedLargeBytes);
     }
 
-    /// <summary>Tworzy paczkę w <paramref name="outputPath"/> (zapis atomowy przez plik tymczasowy).</summary>
+    /// <summary>Tworzy paczkę w częściach nieprzekraczających <see cref="MaxPartBytes"/> na plik.</summary>
     public static ProfilePackageResult Create(IReadOnlyList<ProfileFolderPath> folders, string outputPath, string userName,
                                               string sourceProfile, string? password = null,
-                                              IProgress<ProfilePackageProgress>? progress = null, CancellationToken cancellationToken = default)
+                                              IProgress<ProfilePackageProgress>? progress = null, CancellationToken cancellationToken = default,
+                                              ProfileEstimate? estimate = null) =>
+        CreateCore(folders, outputPath, userName, sourceProfile, password, progress, cancellationToken, MaxPartBytes, estimate);
+
+    internal static ProfilePackageResult CreateCore(IReadOnlyList<ProfileFolderPath> folders, string outputPath, string userName,
+                                                    string sourceProfile, string? password,
+                                                    IProgress<ProfilePackageProgress>? progress, CancellationToken cancellationToken,
+                                                    long maxPartBytes, ProfileEstimate? knownEstimate = null)
     {
         foreach (var folder in folders)
             if (UserProfiles.Find(folder.Key) is null) throw new ArgumentException(L.F("Nieznany folder profilu: {0}", folder.Key));
         if (password is { Length: 0 }) password = null;
+        if (maxPartBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maxPartBytes));
         outputPath = Path.GetFullPath(outputPath);
-        var estimate = Estimate(folders, cancellationToken);
-        var partial = outputPath + ".partial";
+        var estimate = knownEstimate ?? Estimate(folders, cancellationToken);
         var skipped = new List<string>();
         var entries = new List<ProfileFileEntry>();
         long done = 0;
-        try
+        IReadOnlyList<string> parts;
+        using (var packageStream = new PackagePartWriteStream(outputPath, maxPartBytes))
         {
-            using (var file = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (var target = password is null ? file : ProfilePackageCrypto.CreateEncryptingStream(file, password))
-            using (var zip = new ZipArchive(target, ZipArchiveMode.Create, leaveOpen: true))
+            void WriteArchive(Stream target)
             {
+                using var zip = new ZipArchive(target, ZipArchiveMode.Create, leaveOpen: true);
                 var lastReport = DateTime.MinValue;
                 foreach (var folder in folders)
                 {
                     if (!Directory.Exists(folder.Path)) continue;
-                    foreach (var item in Enumerate(folder, [outputPath, partial], cancellationToken))
+                    foreach (var item in Enumerate(folder, [outputPath], cancellationToken))
                     {
                         if (item.File is null)
                         {
                             skipped.Add(L.F("Pominięto dowiązanie: {0}", item.FullPath));
+                            continue;
+                        }
+                        if (estimate.MaxFileSize is long limit && item.File.Length > limit)
+                        {
+                            skipped.Add(L.F("Pominięto duży plik: {0}", item.FullPath));
                             continue;
                         }
                         var entry = TryAddFile(zip, item, skipped, cancellationToken);
@@ -141,18 +166,42 @@ public static class ProfilePackage
                 using var stream = zip.CreateEntry(ManifestEntry, CompressionLevel.Optimal).Open();
                 stream.Write(SerializeManifest(manifest));
             }
-            File.Move(partial, outputPath, overwrite: true);
-        }
-        catch
-        {
-            TryDelete(partial);
-            throw;
+            if (password is null) WriteArchive(packageStream);
+            else
+            {
+                using var encrypted = ProfilePackageCrypto.CreateEncryptingStream(packageStream, password);
+                WriteArchive(encrypted);
+            }
+            parts = packageStream.Commit();
         }
         progress?.Report(new ProfilePackageProgress(done, done, entries.Count, entries.Count, ""));
-        return new ProfilePackageResult(entries.Count, done, skipped);
+        return new ProfilePackageResult(entries.Count, done, skipped, parts);
     }
 
     public static bool IsEncrypted(string packagePath) => ProfilePackageCrypto.IsEncrypted(packagePath);
+
+    public static IReadOnlyList<string> GetPackageParts(string packagePath)
+    {
+        var fullPath = Path.GetFullPath(packagePath);
+        if (!File.Exists(fullPath)) throw new FileNotFoundException(L.T("Nie znaleziono pliku paczki."), fullPath);
+        var numbered = FindNumberedParts(fullPath);
+        var parts = new List<string> { fullPath };
+        var expected = 2;
+        foreach (var (number, path) in numbered.OrderBy(item => item.Key))
+        {
+            if (number != expected)
+                throw new ProfilePackageException(L.F("Brakuje części paczki: {0}", PartPath(fullPath, expected)));
+            parts.Add(path);
+            expected++;
+        }
+        return parts;
+    }
+
+    public static string ComputeSha256(string packagePath)
+    {
+        using var stream = OpenPackageStream(packagePath);
+        return Convert.ToHexStringLower(SHA256.HashData(stream));
+    }
 
     /// <summary>Odczytuje manifest i sprawdza sumę SHA256 oraz rozmiar każdego pliku bez zapisywania czegokolwiek.</summary>
     public static ProfileVerification Verify(string packagePath, string? password = null,
@@ -393,11 +442,221 @@ public static class ProfilePackage
                     pending.Push(sub);
                     continue;
                 }
-                if (IsExcluded(child.Name) ||
-                    exclude?.Any(e => string.Equals(e, child.FullName, StringComparison.OrdinalIgnoreCase)) == true)
+                if (IsExcluded(child.Name) || exclude?.Any(e => IsPackageOutputPath(child.FullName, e)) == true)
                     continue;
                 yield return new FileItem(folder.Key, child.FullName, relative, (FileInfo)child);
             }
+        }
+    }
+
+    private static bool IsPackageOutputPath(string candidate, string outputPath)
+    {
+        if (candidate.Equals(outputPath, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!candidate.StartsWith(outputPath + ".", StringComparison.OrdinalIgnoreCase)) return false;
+        var suffix = candidate[(outputPath.Length + 1)..];
+        return suffix.Length >= 3 && suffix.All(char.IsAsciiDigit);
+    }
+
+    private static string PartPath(string outputPath, int number) =>
+        outputPath + "." + number.ToString("D3", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static Dictionary<int, string> FindNumberedParts(string outputPath)
+    {
+        var directory = Path.GetDirectoryName(outputPath)!;
+        var prefix = Path.GetFileName(outputPath) + ".";
+        var parts = new Dictionary<int, string>();
+        foreach (var path in Directory.EnumerateFiles(directory))
+        {
+            var name = Path.GetFileName(path);
+            if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            var suffix = name[prefix.Length..];
+            if (suffix.Length < 3 || !suffix.All(char.IsAsciiDigit) ||
+                !int.TryParse(suffix, System.Globalization.NumberStyles.None,
+                              System.Globalization.CultureInfo.InvariantCulture, out var number) || number < 2)
+                continue;
+            if (!parts.TryAdd(number, path))
+                throw new ProfilePackageException(L.T("Paczka zawiera powtórzony numer części."));
+        }
+        return parts;
+    }
+
+    private static Stream OpenPackageStream(string packagePath)
+    {
+        var parts = GetPackageParts(packagePath);
+        return parts.Count == 1 ? File.OpenRead(parts[0]) : new PackagePartReadStream(parts);
+    }
+
+    private sealed class PackagePartWriteStream(string outputPath, long maxPartBytes) : Stream
+    {
+        private readonly List<(string Final, string Partial)> _parts = [];
+        private readonly List<string> _published = [];
+        private FileStream? _current;
+        private long _currentBytes;
+        private bool _committed;
+        private bool _disposed;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => !_disposed;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => _current?.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            while (!buffer.IsEmpty)
+            {
+                if (_current is null || _currentBytes == maxPartBytes) OpenNextPart();
+                var count = (int)Math.Min(buffer.Length, maxPartBytes - _currentBytes);
+                _current!.Write(buffer[..count]);
+                _currentBytes += count;
+                buffer = buffer[count..];
+            }
+        }
+
+        private void OpenNextPart()
+        {
+            _current?.Flush(true);
+            _current?.Dispose();
+            var number = _parts.Count + 1;
+            var final = number == 1 ? outputPath : PartPath(outputPath, number);
+            var partial = final + ".partial";
+            _current = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            _parts.Add((final, partial));
+            _currentBytes = 0;
+        }
+
+        public IReadOnlyList<string> Commit()
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _current?.Flush(true);
+            _current?.Dispose();
+            _current = null;
+            var existingParts = FindNumberedParts(outputPath);
+            if (existingParts.Count > 0 || _parts.Count > 1 && File.Exists(outputPath))
+                throw new IOException(L.T("Plik paczki lub jej części już istnieją. Wybierz inną nazwę, aby ich nie nadpisać."));
+            for (var i = _parts.Count - 1; i >= 1; i--)
+            {
+                File.Move(_parts[i].Partial, _parts[i].Final);
+                _published.Add(_parts[i].Final);
+            }
+            File.Move(_parts[0].Partial, _parts[0].Final, overwrite: _parts.Count == 1);
+            _committed = true;
+            return _parts.Select(part => part.Final).ToList();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (!_disposed && disposing)
+            {
+                _disposed = true;
+                _current?.Dispose();
+                if (!_committed)
+                {
+                    foreach (var part in _parts) TryDelete(part.Partial);
+                    foreach (var part in _published) TryDelete(part);
+                }
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+    private sealed class PackagePartReadStream : Stream
+    {
+        private readonly IReadOnlyList<string> _paths;
+        private readonly long[] _starts;
+        private readonly long[] _lengths;
+        private FileStream? _current;
+        private int _currentIndex = -1;
+        private long _position;
+        private bool _disposed;
+
+        public PackagePartReadStream(IReadOnlyList<string> paths)
+        {
+            _paths = paths;
+            _starts = new long[paths.Count];
+            _lengths = new long[paths.Count];
+            for (var i = 0; i < paths.Count; i++)
+            {
+                _starts[i] = i == 0 ? 0 : _starts[i - 1] + _lengths[i - 1];
+                _lengths[i] = new FileInfo(paths[i]).Length;
+            }
+        }
+
+        public override bool CanRead => !_disposed;
+        public override bool CanSeek => !_disposed;
+        public override bool CanWrite => false;
+        public override long Length => _lengths[^1] + _starts[^1];
+        public override long Position { get => _position; set => Seek(value, SeekOrigin.Begin); }
+        public override void Flush() { }
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var total = 0;
+            while (!buffer.IsEmpty && _position < Length)
+            {
+                var index = FindPart(_position);
+                EnsurePart(index);
+                var localPosition = _position - _starts[index];
+                if (_current!.Position != localPosition) _current.Position = localPosition;
+                var available = (int)Math.Min(buffer.Length, _lengths[index] - localPosition);
+                var read = _current.Read(buffer[..available]);
+                if (read == 0) throw new EndOfStreamException(L.T("Brakuje danych w części paczki."));
+                total += read;
+                _position += read;
+                buffer = buffer[read..];
+            }
+            return total;
+        }
+
+        private int FindPart(long position)
+        {
+            for (var i = 0; i < _paths.Count; i++)
+                if (position < _starts[i] + _lengths[i] || i == _paths.Count - 1) return i;
+            return _paths.Count - 1;
+        }
+
+        private void EnsurePart(int index)
+        {
+            if (_currentIndex == index) return;
+            _current?.Dispose();
+            _current = new FileStream(_paths[index], FileMode.Open, FileAccess.Read, FileShare.Read);
+            _currentIndex = index;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var target = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => _position + offset,
+                SeekOrigin.End => Length + offset,
+                _ => throw new ArgumentOutOfRangeException(nameof(origin)),
+            };
+            if (target < 0 || target > Length) throw new IOException(L.T("Nieprawidłowe przesunięcie w paczce."));
+            _position = target;
+            return _position;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (!_disposed && disposing)
+            {
+                _disposed = true;
+                _current?.Dispose();
+            }
+            base.Dispose(disposing);
         }
     }
 
@@ -427,7 +686,7 @@ public static class ProfilePackage
                                     FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 81920, FileOptions.DeleteOnClose);
             try
             {
-                using (var input = File.OpenRead(path)) ProfilePackageCrypto.Decrypt(input, stream, password, cancellationToken);
+                using (var input = OpenPackageStream(path)) ProfilePackageCrypto.Decrypt(input, stream, password, cancellationToken);
                 stream.Position = 0;
             }
             catch
@@ -438,7 +697,7 @@ public static class ProfilePackage
         }
         else
         {
-            stream = File.OpenRead(path);
+            stream = OpenPackageStream(path);
         }
         try
         {

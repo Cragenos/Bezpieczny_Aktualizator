@@ -61,6 +61,8 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        <CheckBox x:Name="SkipLargeFiles" Content="{l:Tr 'Pomiń pliki większe niż 1 GiB (nie będą w kopii)'}"
+                                  Margin="0,6,0,0" Checked="Folder_Changed" Unchecked="Folder_Changed" />
                         <TextBlock x:Name="EstimateText" Style="{StaticResource Secondary}" TextWrapping="Wrap" Margin="0,6,0,0" />
                         <TextBlock Text="{l:Tr 'Hasło (opcjonalnie, szyfruje paczkę):'}" Margin="0,10,0,4" />
                         <PasswordBox x:Name="CreatePassword" AutomationProperties.Name="{l:Tr 'Hasło (opcjonalnie, szyfruje paczkę):'}" />

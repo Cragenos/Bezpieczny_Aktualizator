@@ -77,6 +77,15 @@ public class WingetParsingTests
     }
 
     [Fact]
+    public async Task ListInstalledReturnsEmptyWhenWinGetReportsNoApplications()
+    {
+        WingetClient.CommandRunner run = (_, _) =>
+            Task.FromResult((unchecked((int)0x8A150014), "No installed package found matching input criteria."));
+
+        Assert.Empty(await WingetClient.ListInstalledCoreAsync(run));
+    }
+
+    [Fact]
     public async Task InstalledVersionIsReadWhenSourceFilteredListOmitsSourceColumn()
     {
         const string output = """
@@ -87,6 +96,38 @@ public class WingetParsingTests
         WingetClient.CommandRunner run = (_, _) => Task.FromResult((0, output));
 
         Assert.Equal("26.06", await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", run));
+    }
+
+    [Fact]
+    public async Task InstalledVersionFallsBackToExactIdWhenSourceFilteredQueryDoesNotFindPackage()
+    {
+        var output = ListOutput.Replace("26.05", "26.06", StringComparison.Ordinal);
+        var calls = new List<IReadOnlyList<string>>();
+        WingetClient.CommandRunner run = (args, _) =>
+        {
+            calls.Add(args);
+            return Task.FromResult(args.Contains("--source")
+                ? (unchecked((int)0x8A150014), "No installed package found matching input criteria.")
+                : (0, output));
+        };
+
+        Assert.Equal("26.06", await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", run));
+        Assert.Equal(2, calls.Count);
+        Assert.Contains("--source", calls[0]);
+        Assert.DoesNotContain("--source", calls[1]);
+        Assert.Contains("7zip.7zip", calls[1]);
+    }
+
+    [Fact]
+    public async Task InstalledVersionFallbackRejectsDifferentSource()
+    {
+        var output = ListOutput.Replace("26.05", "26.06", StringComparison.Ordinal)
+            .Replace("winget", "other-source", StringComparison.Ordinal);
+        WingetClient.CommandRunner run = (args, _) => Task.FromResult(args.Contains("--source")
+            ? (unchecked((int)0x8A150014), "No installed package found matching input criteria.")
+            : (0, output));
+
+        Assert.Null(await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", run));
     }
 
     [Fact]

@@ -21,6 +21,8 @@
                     ToolTip="{l:Tr 'Wykluczone programy, wstrzymane wersje i wymagany poziom zaufania źródeł aktualizacji.'}" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE721;" Content="{l:Tr 'Szukaj w repozytorium'}" Click="Search_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE774;" Content="{l:Tr 'Strona producenta'}" Click="Homepage_Click" />
+            <Button Style="{StaticResource ToolButton}" Tag="&#xE8A5;" Content="{l:Tr 'Eksportuj listę aplikacji'}" Click="ExportApps_Click" />
+            <Button Style="{StaticResource ToolButton}" Tag="&#xE8B7;" Content="{l:Tr 'Importuj listę aplikacji'}" Click="ImportApps_Click" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE78C;" Content="{l:Tr 'Eksportuj raport'}" Click="Export_Click" />
         </WrapPanel>
 
