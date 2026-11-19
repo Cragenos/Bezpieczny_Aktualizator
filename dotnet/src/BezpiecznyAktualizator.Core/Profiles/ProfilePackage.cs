@@ -46,7 +46,10 @@ public enum RestoreConflictMode
 }
 
 public sealed record ProfileRestoreResult(int Restored, int Skipped, int BackedUp, int Renamed, string? BackupFolder,
-                                          IReadOnlyList<string> Problems, bool Canceled = false);
+                                          IReadOnlyList<string> Problems, bool Canceled = false)
+{
+    public IReadOnlyList<string> BackupFolders { get; init; } = BackupFolder is { } folder ? [folder] : [];
+}
 
 public sealed record ProfileRestorePreview(int FilesToWrite, long BytesToWrite, int ExistingFiles, long ExistingBytes,
                                            int SkippedFiles, IReadOnlyDictionary<string, long> BytesByVolume);
@@ -301,7 +304,8 @@ public static class ProfilePackage
 
     /// <summary>
     /// Przywraca pliki do folderów docelowych (klucz → ścieżka). Najpierw weryfikuje całą paczkę – jeśli cokolwiek się nie zgadza,
-    /// nic nie jest zapisywane. Nadpisywane pliki trafiają do <paramref name="backupRoot"/>.
+    /// nic nie jest zapisywane. Nadpisywane pliki trafiają do <paramref name="backupRoot"/>; przy innym woluminie
+    /// używany jest folder kopii obok folderu docelowego.
     /// </summary>
     public static ProfileRestoreResult Restore(string packagePath, IReadOnlyList<ProfileFolderPath> targets, RestoreConflictMode mode,
                                                string backupRoot, string? password = null,
@@ -313,12 +317,13 @@ public static class ProfilePackage
             throw new ProfilePackageException(L.T("Paczka nie przeszła weryfikacji – niczego nie przywrócono.") + "\n" +
                                               string.Join("\n", verification.Problems.Take(10)));
         var map = targets.ToDictionary(t => t.Key, t => Path.GetFullPath(t.Path), StringComparer.Ordinal);
+        var requestedBackupRoot = Path.GetFullPath(backupRoot);
         var manifest = package.Manifest;
         var problems = new List<string>();
+        var backupFilesByFolder = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         int restored = 0, skipped = 0, backedUp = 0, renamed = 0, count = 0;
         long done = 0;
         var lastReport = DateTime.MinValue;
-        var backupUsed = false;
         var canceled = false;
         foreach (var file in manifest.Files)
         {
@@ -345,17 +350,21 @@ public static class ProfilePackage
                 continue;
             }
             string? backupPath = null;
+            string? backupFolderForFile = null;
             var originalMovedToBackup = false;
 
             Exception? RestoreOriginal()
             {
-                if (!originalMovedToBackup || backupPath is null || File.Exists(destination) || Directory.Exists(destination))
+                if (!originalMovedToBackup || backupPath is null || backupFolderForFile is null ||
+                    File.Exists(destination) || Directory.Exists(destination))
                     return null;
                 try
                 {
                     File.Move(backupPath, destination);
                     backedUp--;
-                    backupUsed = backedUp > 0;
+                    var remaining = backupFilesByFolder[backupFolderForFile] - 1;
+                    if (remaining == 0) backupFilesByFolder.Remove(backupFolderForFile);
+                    else backupFilesByFolder[backupFolderForFile] = remaining;
                     originalMovedToBackup = false;
                     return null;
                 }
@@ -381,11 +390,12 @@ public static class ProfilePackage
                     }
                     else
                     {
-                        backupPath = UniqueName(SafeCombine(Path.Combine(backupRoot, key), relative));
+                        backupFolderForFile = ResolveBackupRoot(root, requestedBackupRoot);
+                        backupPath = UniqueName(SafeCombine(Path.Combine(backupFolderForFile, key), relative));
                         Directory.CreateDirectory(Path.GetDirectoryName(backupPath)!);
                         File.Move(destination, backupPath);
                         originalMovedToBackup = true;
-                        backupUsed = true;
+                        backupFilesByFolder[backupFolderForFile] = backupFilesByFolder.GetValueOrDefault(backupFolderForFile) + 1;
                         backedUp++;
                     }
                 }
@@ -416,7 +426,11 @@ public static class ProfilePackage
             }
         }
         canceled |= cancellationToken.IsCancellationRequested;
-        return new ProfileRestoreResult(restored, skipped, backedUp, renamed, backupUsed ? backupRoot : null, problems, canceled);
+        var backupFolders = backupFilesByFolder.Keys.OrderBy(folder => folder, StringComparer.OrdinalIgnoreCase).ToArray();
+        return new ProfileRestoreResult(restored, skipped, backedUp, renamed, backupFolders.FirstOrDefault(), problems, canceled)
+        {
+            BackupFolders = backupFolders,
+        };
     }
 
     private static void Extract(ZipArchiveEntry entry, ProfileFileEntry file, string destination, CancellationToken cancellationToken)
@@ -926,6 +940,21 @@ public static class ProfilePackage
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new ProfilePackageException(L.F("Ścieżka wychodzi poza folder docelowy: {0}", relative));
         return full;
+    }
+
+    private static string ResolveBackupRoot(string targetRoot, string requestedBackupRoot)
+    {
+        var targetPath = Path.GetFullPath(targetRoot);
+        var targetVolume = Path.GetPathRoot(targetPath);
+        var backupPath = Path.GetFullPath(requestedBackupRoot);
+        if (string.Equals(targetVolume, Path.GetPathRoot(backupPath), StringComparison.OrdinalIgnoreCase))
+            return backupPath;
+
+        var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(targetPath)) ?? targetVolume;
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(backupPath));
+        if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(name))
+            throw new ProfilePackageException(L.T("Nie można ustalić dysku docelowego."));
+        return Path.Combine(parent, name);
     }
 
     /// <summary>Czy którykolwiek istniejący element ścieżki pod <paramref name="root"/> (lub sam plik) jest dowiązaniem.</summary>

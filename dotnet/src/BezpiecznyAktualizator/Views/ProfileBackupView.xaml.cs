@@ -469,10 +469,14 @@ public partial class ProfileBackupView : UserControl
                           result.Restored, result.Skipped, result.Renamed, result.BackedUp, result.Problems.Count);
         _lastSummary = canceled ? L.F("Anulowano: {0}", summary) : summary;
         _runner.Log(_lastSummary, canceled || result.Problems.Count > 0 ? SyslogSeverity.Warning : SyslogSeverity.Notice);
-        if (result.BackupFolder is { } backup) _runner.Log(L.F("Zastąpione pliki zachowano w: {0}", backup), SyslogSeverity.Notice);
+        foreach (var backup in result.BackupFolders)
+            _runner.Log(L.F("Zastąpione pliki zachowano w: {0}", backup), SyslogSeverity.Notice);
         _runner.UpdateSummary();
         RestorePassword.Clear();
-        var message = _lastSummary + (result.BackupFolder is { } b ? "\n\n" + L.F("Zastąpione pliki zachowano w: {0}", b) : "");
+        var backupsMessage = result.BackupFolders.Count > 0
+            ? "\n\n" + L.F("Zastąpione pliki zachowano w: {0}", string.Join(Environment.NewLine, result.BackupFolders))
+            : "";
+        var message = _lastSummary + backupsMessage;
         if (canceled || result.Problems.Count > 0)
             Ui.Warn(this, L.T("Przywróć z paczki"), message + (result.Problems.Count > 0 ? "\n\n" + L.T("Szczegóły w zakładce „Dziennik”.") : ""));
         else Ui.Info(this, L.T("Przywróć z paczki"), message);

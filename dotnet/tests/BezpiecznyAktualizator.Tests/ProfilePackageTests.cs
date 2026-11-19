@@ -367,6 +367,54 @@ public sealed class ProfilePackageTests : IDisposable
             File.ReadAllBytes(existing));
     }
 
+    [Fact]
+    public void OverwriteBackupUsesTargetVolumeWhenRequestedBackupIsOnAnotherVolume()
+    {
+        var targetVolume = Path.GetPathRoot(_root.FullName);
+        string? alternateRoot = null;
+        foreach (var drive in DriveInfo.GetDrives())
+        {
+            if (!drive.IsReady || drive.DriveType != DriveType.Fixed ||
+                string.Equals(drive.RootDirectory.FullName, targetVolume, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var candidate = Path.Combine(drive.RootDirectory.FullName, $"ba_profile_backup_test_{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(candidate);
+                alternateRoot = candidate;
+                break;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+        if (alternateRoot is null) return;
+
+        try
+        {
+            var source = CreateSource();
+            var package = PathOf("profil" + ProfilePackage.Extension);
+            ProfilePackage.Create(Folders(source), package, "jan", source);
+            var target = PathOf("dst");
+            var existing = Path.Combine(target, "Documents", "raport.txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(existing)!);
+            File.WriteAllText(existing, "old");
+            var requestedBackup = Path.Combine(alternateRoot, "backup");
+            var expectedBackup = Path.Combine(target, "backup");
+
+            var result = ProfilePackage.Restore(package, Folders(target), RestoreConflictMode.Overwrite, requestedBackup);
+
+            Assert.Empty(result.Problems);
+            Assert.Equal(expectedBackup, Assert.Single(result.BackupFolders));
+            Assert.Equal("old", File.ReadAllText(Path.Combine(expectedBackup, "Documents", "raport.txt")));
+            Assert.False(Directory.Exists(requestedBackup));
+        }
+        finally
+        {
+            Directory.Delete(alternateRoot, recursive: true);
+        }
+    }
+
     private sealed class CancelAfterFirstRestoredFile(CancellationTokenSource cancellation) : IProgress<ProfilePackageProgress>
     {
         private bool _verificationComplete;
