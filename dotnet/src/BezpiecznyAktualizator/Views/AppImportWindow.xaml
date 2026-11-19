@@ -1,0 +1,37 @@
+<Window x:Class="BezpiecznyAktualizator.Views.AppImportWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:l="clr-namespace:BezpiecznyAktualizator.Services"
+        Title="{l:Tr 'Import aplikacji'}" Width="900" Height="560"
+        MinWidth="600" MinHeight="360" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <DockPanel Margin="16">
+        <TextBlock x:Name="Header" DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap" />
+        <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap"
+                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                   Text="{l:Tr 'Plik listy nie jest podpisany. Przejrzyj pełną listę przed importem.'}" />
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0" LastChildFill="False">
+            <Button x:Name="SelectAllButton" Content="{l:Tr 'Zaznacz wszystkie'}" Padding="10,4" Margin="0,0,6,0" Click="SelectAll_Click" />
+            <Button x:Name="ClearSelectionButton" Content="{l:Tr 'Odznacz wszystkie'}" Padding="10,4" Click="ClearSelection_Click" />
+            <Button DockPanel.Dock="Right" Content="{l:Tr 'Anuluj'}" Padding="12,4" IsCancel="True" />
+            <Button x:Name="ContinueButton" DockPanel.Dock="Right" Content="{l:Tr 'Kontynuuj'}"
+                    Padding="12,4" Margin="0,0,6,0" IsEnabled="False" Click="Continue_Click" />
+            <TextBlock x:Name="SelectionCount" DockPanel.Dock="Right" Margin="0,0,12,0" VerticalAlignment="Center" />
+        </DockPanel>
+        <DataGrid x:Name="Packages" Style="{StaticResource Grid}" IsReadOnly="False" SelectionMode="Single">
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="{l:Tr 'Wybierz'}" Width="75">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <CheckBox HorizontalAlignment="Center" IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      AutomationProperties.Name="{Binding Entry.Id}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="{l:Tr 'Nazwa'}" Binding="{Binding Entry.Name}" Width="2*" IsReadOnly="True" />
+                <DataGridTextColumn Header="{l:Tr 'Identyfikator pakietu'}" Binding="{Binding Entry.Id}" Width="2*" IsReadOnly="True" />
+                <DataGridTextColumn Header="{l:Tr 'Wersja na komputerze źródłowym'}" Binding="{Binding Entry.Version}"
+                                    Width="180" IsReadOnly="True" />
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

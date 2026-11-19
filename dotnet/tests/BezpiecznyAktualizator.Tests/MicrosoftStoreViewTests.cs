@@ -1,9 +1,15 @@
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
+using System.Windows.Threading;
+using BezpiecznyAktualizator.Core.Inventory;
 using BezpiecznyAktualizator.Core.Models;
+using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Security;
+using BezpiecznyAktualizator.Core.Winget;
 using BezpiecznyAktualizator.Views;
 
 namespace BezpiecznyAktualizator.Tests;
@@ -11,6 +17,23 @@ namespace BezpiecznyAktualizator.Tests;
 [Collection(nameof(SyslogTests))]
 public class MicrosoftStoreViewTests
 {
+    [Fact]
+    public void ImportedAppPolicyChecksVerifiedVersionRatherThanSourceComputerVersion()
+    {
+        var software = new Software { WingetId = "Vendor.App", WingetSource = "winget", Version = "1.0" };
+        var policies = new UpdatePolicies
+        {
+            Holds = [new VersionHold { WingetId = "Vendor.App", Version = "1.0" }],
+        };
+        var now = DateTimeOffset.Now;
+
+        Assert.Equal(PolicyVerdict.Held, SoftwareView.EvaluateImportPolicy(policies, software, "2.0", now, null).Verdict);
+        Assert.Equal(PolicyVerdict.Allowed, SoftwareView.EvaluateImportPolicy(policies, software, "1.0", now, null).Verdict);
+        Assert.Equal(PolicyVerdict.MachinePolicyUnavailable,
+            SoftwareView.EvaluateImportPolicy(policies, software, "1.0", now, "error").Verdict);
+        Assert.Throws<WingetException>(() => SoftwareView.EvaluateImportPolicy(policies, software, "", now, null));
+    }
+
     [Fact]
     public void MainWindowContainsStoreTabWithExpectedControls()
     {
@@ -64,6 +87,39 @@ public class MicrosoftStoreViewTests
                 root.Measure(new Size(1200, 800));
                 root.Arrange(new Rect(0, 0, 1200, 800));
                 root.UpdateLayout();
+
+                var packages = Enumerable.Range(1, 25)
+                    .Select(i => new AppTransferEntry($"Vendor.App{i}", $"App {i}", "winget", "1.0"))
+                    .ToList();
+                var importWindow = new AppImportWindow(AppTransferManifestFile.Create(packages, "PC"), packages);
+                var grid = Assert.IsType<DataGrid>(importWindow.FindName("Packages"));
+                var continueButton = Assert.IsType<Button>(importWindow.FindName("ContinueButton"));
+                Assert.Equal(25, grid.Items.Count);
+                Assert.Empty(importWindow.SelectedApps);
+                Assert.False(continueButton.IsEnabled);
+                var last = Assert.IsType<AppImportOption>(grid.Items[24]);
+                var selectionColumn = Assert.IsType<DataGridTemplateColumn>(grid.Columns[0]);
+                var checkbox = Assert.IsType<CheckBox>(selectionColumn.CellTemplate.LoadContent());
+                checkbox.DataContext = last;
+                var testHost = new ContentControl { Content = checkbox };
+                testHost.Measure(new Size(100, 50));
+                testHost.Arrange(new Rect(0, 0, 100, 50));
+                testHost.UpdateLayout();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
+                checkbox.GetBindingExpression(CheckBox.IsCheckedProperty)!.UpdateTarget();
+                Assert.Same(last, checkbox.GetBindingExpression(CheckBox.IsCheckedProperty)!.DataItem);
+                var toggle = Assert.IsAssignableFrom<IToggleProvider>(
+                    new CheckBoxAutomationPeer(checkbox).GetPattern(PatternInterface.Toggle));
+                toggle.Toggle();
+                Assert.Equal("Vendor.App25", Assert.Single(importWindow.SelectedApps).Id);
+                Assert.True(continueButton.IsEnabled);
+                var selectAll = Assert.IsType<Button>(importWindow.FindName("SelectAllButton"));
+                selectAll.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal(25, importWindow.SelectedApps.Count);
+                var clear = Assert.IsType<Button>(importWindow.FindName("ClearSelectionButton"));
+                clear.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Empty(importWindow.SelectedApps);
+                Assert.False(continueButton.IsEnabled);
                 app.Shutdown();
             }
             catch (Exception ex)

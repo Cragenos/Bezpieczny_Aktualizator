@@ -1388,28 +1388,27 @@ public partial class SoftwareView : UserControl
             return;
         }
 
-        var preview = L.F("Lista z komputera {0}: {1} pakietów; już zainstalowane: {2}; do zainstalowania: {3}.",
-            manifest.Machine, manifest.Apps.Count, manifest.Apps.Count - missing.Count, missing.Count) + "\n\n" +
-            string.Join("\n", missing.Take(20).Select(app => $"• {app.Name} [{app.Id}]")) +
-            (missing.Count > 20 ? "\n" + L.F("… i {0} kolejnych.", missing.Count - 20) : "") +
-            "\n\n" + L.T("Plik listy nie jest podpisany. Przejrzyj pełną listę przed importem.") +
-            "\n\n" + L.T("Instalacja użyje wyłącznie źródła winget i przejdzie weryfikację instalatora oraz kontrolę polityk. Kontynuować?");
-        if (!Ui.Confirm(this, L.T("Potwierdź import aplikacji"), preview, warning: true)) return;
+        var selection = new AppImportWindow(manifest, missing) { Owner = Window.GetWindow(this) };
+        if (selection.ShowDialog() != true) return;
+        var selected = selection.SelectedApps;
+        if (!Ui.Confirm(this, L.T("Potwierdź import aplikacji"),
+                L.F("Zaznaczono do instalacji: {0}.", selected.Count) + "\n\n" +
+                L.T("Instalacja użyje wyłącznie źródła winget i przejdzie weryfikację instalatora oraz kontrolę polityk. Kontynuować?"),
+                warning: true)) return;
 
         var installedCount = 0;
         var installCommandSucceeded = false;
         var ok = await _runner.RunCancellableAsync(LogEvent.Upgrade,
-            L.F("Instalowanie {0} aplikacji z przeniesionej listy...", missing.Count),
+            L.F("Instalowanie {0} aplikacji z przeniesionej listy...", selected.Count),
             async token =>
             {
                 bool? backupReady = null;
-                foreach (var app in missing)
+                foreach (var app in selected)
                 {
                     token.ThrowIfCancellationRequested();
                     var software = new Software
                     {
                         Name = app.Name,
-                        Version = app.Version,
                         WingetId = app.Id,
                         WingetSource = app.Source,
                         WingetDetected = true,
@@ -1449,6 +1448,16 @@ public partial class SoftwareView : UserControl
                     {
                         backupReady ??= await InstallBackup.EnsureAsync(this, RestorePointPurpose.Software, _runner.Log);
                         if (backupReady == false) break;
+                        policies = Settings.LoadPolicies(out policyError);
+                        decision = EvaluateImportPolicy(policies, software, expectedVersion, DateTimeOffset.Now, policyError);
+                        if (decision.Verdict == PolicyVerdict.MachinePolicyUnavailable)
+                            throw new WingetException(decision.Reason.ToString());
+                        if (!decision.Allowed)
+                        {
+                            _runner.Log(L.F("Pominięto {0}: {1}", app.Name, decision.Reason.ToString()),
+                                SyslogSeverity.Notice, LogEvent.Policy);
+                            continue;
+                        }
                         _runner.Log(L.F("Instalowanie {0} ({1})...", app.Name, app.Id), SyslogSeverity.Notice);
                         var code = await WingetClient.InstallVerifiedAsync(verified, line => UiLog("  " + line), ct: token);
                         if (code != 0)
@@ -1487,8 +1496,18 @@ public partial class SoftwareView : UserControl
         if (installCommandSucceeded) await ScanAsync(checkUpdates: false);
         if (ok)
             Ui.Info(this, L.T("Import aplikacji"),
-                L.F("Zainstalowano i potwierdzono {0} z {1} brakujących aplikacji. Szczegóły pozostałych są w dzienniku.",
-                    installedCount, missing.Count));
+                L.F("Zainstalowano i potwierdzono {0} z {1} zaznaczonych aplikacji. Szczegóły pozostałych są w dzienniku.",
+                    installedCount, selected.Count));
+    }
+
+    internal static PolicyDecision EvaluateImportPolicy(UpdatePolicies policies, Software software, string verifiedVersion,
+                                                         DateTimeOffset now, string? policyError)
+    {
+        if (string.IsNullOrWhiteSpace(verifiedVersion))
+            throw new WingetException(L.T("Pobrany manifest nie zawiera wersji pakietu."));
+        software.Version = "";
+        software.AvailableVersion = verifiedVersion;
+        return policies.Evaluate(software, automatic: false, now, policyError);
     }
 
     private void Export_Click(object sender, RoutedEventArgs e)

@@ -247,7 +247,7 @@ Przycisk **Sprawdź gotowość aktualizacji** pokazuje, czy WinGet jest dostępn
 
 ## Przenoszenie listy aplikacji
 
-W zakładce **Oprogramowanie** można wyeksportować rozpoznane pakiety z oficjalnego źródła WinGet do pliku `.baapps.json`, a na drugim komputerze zaimportować listę. Plik zawiera wyłącznie identyfikatory, nazwy, wersje i źródło — nie instalatory ani dane użytkownika. Nie jest podpisany, dlatego przed importem należy przejrzeć listę. Import porównuje ją z pakietami zainstalowanymi na komputerze i pomija już obecne aplikacje.
+W zakładce **Oprogramowanie** można wyeksportować rozpoznane pakiety z oficjalnego źródła WinGet do pliku `.baapps.json`, a na drugim komputerze zaimportować listę. Plik zawiera wyłącznie identyfikatory, nazwy, wersje i źródło — nie instalatory ani dane użytkownika. Nie jest podpisany, dlatego przed importem należy przejrzeć listę. Import pomija już obecne aplikacje i pokazuje pełną listę pozostałych; użytkownik wybiera programy do zainstalowania (domyślnie żaden nie jest zaznaczony). Wersja na liście pochodzi z komputera źródłowego; instalowana jest zweryfikowana wersja dostępna w repozytorium.
 
 Po jawnej akceptacji brakujące aplikacje są instalowane pojedynczo wyłącznie ze źródła `winget`, z zastosowaniem zasad aktualizacji, punktu przywracania i tej samej weryfikacji instalatora (manifest/SHA256, podpis, dostępne skanowanie antywirusowe). Po każdej instalacji program sprawdza zgłoszoną wersję. Pliki importu są walidowane (do 500 pakietów i 2 MiB); obce źródła, nieprawidłowe identyfikatory i duplikaty są odrzucane. Pakiety Microsoft Store i innych źródeł nie są eksportowane.
 
