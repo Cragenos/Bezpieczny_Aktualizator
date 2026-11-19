@@ -22,8 +22,6 @@
                       Checked="Filter_Changed" Unchecked="Filter_Changed" />
             <CheckBox x:Name="HideGeneric" Content="{l:Tr 'Ukryj ogólne sterowniki systemu Windows'}" VerticalAlignment="Center"
                       Margin="12,0,0,0" Checked="Filter_Changed" Unchecked="Filter_Changed" />
-            <CheckBox x:Name="RestorePoint" Content="{l:Tr 'Punkt przywracania przed instalacją'}" IsChecked="True"
-                      VerticalAlignment="Center" Margin="12,0,0,0" />
             <TextBlock x:Name="CountLabel" DockPanel.Dock="Right" Style="{StaticResource Secondary}" />
         </DockPanel>
 

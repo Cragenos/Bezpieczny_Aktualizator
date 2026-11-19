@@ -23,6 +23,9 @@ public class SystemRestorePointTests
         Assert.Equal(RestorePointOutcome.Recent, result.Outcome);
         Assert.Equal(recent, result.PointTime);
         Assert.True(result.Succeeded);
+        Assert.True(SystemRestorePoint.IsRecent(recent, Now));
+        Assert.False(SystemRestorePoint.IsRecent(Now.AddHours(-25), Now));
+        Assert.False(SystemRestorePoint.IsRecent(null, Now));
     }
 
     [Theory]
@@ -34,6 +37,26 @@ public class SystemRestorePointTests
         var point = Now.AddHours(hoursOffset);
         Assert.Equal(RestorePointOutcome.Failed, SystemRestorePoint.Evaluate(code, point, point, Now).Outcome);
         Assert.False(SystemRestorePoint.Evaluate(code, null, null, Now).Succeeded);
+    }
+
+    [Fact]
+    public void ImplausiblyFuturePointCannotBeUsedAsBackup()
+    {
+        var future = Now.AddMinutes(6);
+        var result = SystemRestorePoint.Evaluate(0, null, future, Now);
+        Assert.Equal(RestorePointOutcome.Failed, result.Outcome);
+        Assert.Equal(future, result.PointTime);
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(1058u)]
+    public void OldPointCannotBeReportedAsCreated(uint returnCode)
+    {
+        var oldPoint = Now.AddHours(-25);
+        var result = SystemRestorePoint.Evaluate(returnCode, null, oldPoint, Now);
+        Assert.Equal(RestorePointOutcome.Failed, result.Outcome);
+        Assert.False(result.Succeeded);
     }
 
     [Theory]

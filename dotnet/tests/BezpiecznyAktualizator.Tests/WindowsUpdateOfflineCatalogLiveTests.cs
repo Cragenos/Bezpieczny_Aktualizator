@@ -2,7 +2,7 @@ using BezpiecznyAktualizator.Core.Updates;
 
 namespace BezpiecznyAktualizator.Tests;
 
-[Trait("Category", "Live")]
+[Trait("Category", "OfflineCatalogIntegration")]
 public sealed class WindowsUpdateOfflineCatalogLiveTests
 {
     [Fact]

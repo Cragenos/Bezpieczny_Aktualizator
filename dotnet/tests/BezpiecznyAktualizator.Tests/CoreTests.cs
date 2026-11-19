@@ -77,6 +77,19 @@ public class WingetParsingTests
     }
 
     [Fact]
+    public async Task InstalledVersionIsReadWhenSourceFilteredListOmitsSourceColumn()
+    {
+        const string output = """
+            Name              Id        Version
+            -----------------------------------
+            7-Zip 26.06 (x64) 7zip.7zip 26.06
+            """;
+        WingetClient.CommandRunner run = (_, _) => Task.FromResult((0, output));
+
+        Assert.Equal("26.06", await WingetClient.InstalledVersionCoreAsync("7zip.7zip", "winget", run));
+    }
+
+    [Fact]
     public async Task InstalledVersionIsNotConfirmedWhenMissingUnknownOrAmbiguous()
     {
         WingetClient.CommandRunner missing = (_, _) =>

@@ -19,6 +19,75 @@ public sealed class WingetExecutionTests : IDisposable
     }
 
     [Theory]
+    [InlineData("exe", "exe")]
+    [InlineData("exe", "nullsoft")]
+    [InlineData("exe", "inno")]
+    [InlineData("exe", "burn")]
+    [InlineData("msi", "msi")]
+    [InlineData("msi", "wix")]
+    public async Task DownloadsOnlyACompatibleInstallerFamily(string installedType, string availableType)
+    {
+        var attempted = new List<string>();
+        var result = await WingetClient.DownloadCompatibleAsync("7zip.7zip", "download-dir", "winget", "26.06",
+            installedType, (args, _) =>
+            {
+                var type = args[args.ToList().IndexOf("--installer-type") + 1];
+                attempted.Add(type);
+                Assert.Contains("--skip-dependencies", args);
+                Assert.Equal("26.06", args[args.ToList().IndexOf("--version") + 1]);
+                Assert.DoesNotContain("--force", args);
+                return Task.FromResult(type == availableType ? (0, "downloaded") : (unchecked((int)0x8A150010), "no installer"));
+            });
+        Assert.Equal((0, "downloaded"), result);
+        Assert.Equal(availableType, attempted[^1]);
+        Assert.All(attempted, type => Assert.Contains(type,
+            installedType == "msi" ? new[] { "msi", "wix" } : ["exe", "nullsoft", "inno", "burn"]));
+    }
+
+    [Theory]
+    [InlineData(unchecked((int)0x8A150011))]
+    [InlineData(unchecked((int)0x80072EE7))]
+    public async Task CompatibleDownloadDoesNotRetryHashOrNetworkFailures(int code)
+    {
+        var calls = 0;
+        var result = await WingetClient.DownloadCompatibleAsync("example.package", "dir", "winget", "1.0", "exe",
+            (_, _) =>
+            {
+                calls++;
+                return Task.FromResult((code, "failed"));
+            });
+        Assert.Equal(1, calls);
+        Assert.Equal(code, result.Code);
+    }
+
+    [Fact]
+    public async Task MissingCompatibleInstallerNeverFallsBackToAnotherFamily()
+    {
+        var calls = 0;
+        var result = await WingetClient.DownloadCompatibleAsync("example.package", "dir", "winget", "1.0", "msi",
+            (args, _) =>
+            {
+                Assert.Contains("--installer-type", args);
+                calls++;
+                return Task.FromResult((unchecked((int)0x8A150010), "no compatible installer"));
+            });
+        Assert.Equal(2, calls);
+        Assert.Equal(unchecked((int)0x8A150010), result.Code);
+    }
+
+    [Fact]
+    public async Task UnknownInstalledTypePreservesDefaultDownloadSelection()
+    {
+        var result = await WingetClient.DownloadCompatibleAsync("example.package", "dir", "winget", "1.0", "",
+            (args, _) =>
+            {
+                Assert.DoesNotContain("--installer-type", args);
+                return Task.FromResult((0, "default installer"));
+            });
+        Assert.Equal((0, "default installer"), result);
+    }
+
+    [Theory]
     [InlineData("list|--disable-interactivity")]
     [InlineData("search|--query|Example")]
     [InlineData("show|--id|Example.App|--exact")]
@@ -257,5 +326,55 @@ public sealed class WingetExecutionTests : IDisposable
         Assert.Equal(1, calls);
         Assert.Contains("LocalManifestFiles", error.Message);
         Assert.DoesNotContain("usage: winget", error.Message);
+    }
+
+    [Fact]
+    public async Task EnablesLocalManifestFilesWithElevatedCommandAndVerifiesItAfterward()
+    {
+        var enabled = false;
+        var verified = false;
+        await WingetClient.EnableLocalManifestFilesCoreAsync((args, _) =>
+        {
+            Assert.Equal(["settings", "--enable", "LocalManifestFiles"], args);
+            enabled = true;
+            return Task.FromResult((0, ""));
+        }, (args, _) =>
+        {
+            Assert.True(enabled);
+            Assert.Equal(["settings", "export", "--disable-interactivity"], args);
+            verified = true;
+            return Task.FromResult((0, """{"adminSettings":{"LocalManifestFiles":true}}"""));
+        });
+
+        Assert.True(verified);
+    }
+
+    [Fact]
+    public async Task DoesNotVerifyOrProceedWhenEnablingLocalManifestFilesFails()
+    {
+        var verified = false;
+        var error = await Assert.ThrowsAsync<WingetException>(() =>
+            WingetClient.EnableLocalManifestFilesCoreAsync((args, _) =>
+            {
+                Assert.Equal(["settings", "--enable", "LocalManifestFiles"], args);
+                return Task.FromResult((1, "access denied"));
+            }, (_, _) =>
+            {
+                verified = true;
+                return Task.FromResult((0, """{"adminSettings":{"LocalManifestFiles":true}}"""));
+            }));
+
+        Assert.Contains("0x00000001", error.Message);
+        Assert.False(verified);
+    }
+
+    [Fact]
+    public async Task RejectsLocalManifestEnableWhenWinGetDoesNotReportItEnabled()
+    {
+        var error = await Assert.ThrowsAsync<WingetException>(() =>
+            WingetClient.EnableLocalManifestFilesCoreAsync((_, _) => Task.FromResult((0, "")),
+                (_, _) => Task.FromResult((0, """{"adminSettings":{"LocalManifestFiles":false}}"""))));
+
+        Assert.Contains("LocalManifestFiles", error.Message);
     }
 }

@@ -12,6 +12,19 @@ namespace BezpiecznyAktualizator.Tests;
 
 public class ScheduleTests
 {
+    [Fact]
+    public void FailedRestorePointSetsScheduledFailureExitCode()
+    {
+        var state = new ScheduleState { BackupFailed = true, SkipReason = "brak punktu przywracania" };
+        Assert.True(state.HasErrors);
+        Assert.Equal(1, ScheduledRunner.GetExitCode(state));
+
+        state.BackupFailed = false;
+        state.SkipReason = "komputer jest na baterii";
+        Assert.False(state.HasErrors);
+        Assert.Equal(0, ScheduledRunner.GetExitCode(state));
+    }
+
     private static readonly XNamespace Ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
 
     [Fact]
@@ -205,7 +218,8 @@ public class ScheduleTests
             var run = new DateTimeOffset(2026, 5, 1, 3, 15, 0, TimeSpan.FromHours(2));
             new ScheduleState
             {
-                LastRun = run, Installed = true, Updates = 3, Updated = ["A 1 → 2"], Skipped = ["B"], DriverUpdates = 1, Interrupted = true,
+                LastRun = run, Installed = true, Updates = 3, Updated = ["A 1 → 2"], Skipped = ["B"], DriverUpdates = 1,
+                Interrupted = true, BackupFailed = true, SkipReason = "brak punktu przywracania",
             }.Save();
             Assert.Empty(Directory.GetFiles(dir.FullName, "state.json.*.tmp"));
             var loaded = ScheduleState.Load();
@@ -216,6 +230,8 @@ public class ScheduleTests
             Assert.Equal(["B"], loaded.Skipped);
             Assert.Equal(1, loaded.DriverUpdates);
             Assert.True(loaded.Interrupted);
+            Assert.True(loaded.BackupFailed);
+            Assert.Contains("brak punktu przywracania", loaded.Summary());
             Assert.Contains("3", loaded.Summary());
 
             File.WriteAllText(ScheduleState.FilePath, "{ uszkodzony");

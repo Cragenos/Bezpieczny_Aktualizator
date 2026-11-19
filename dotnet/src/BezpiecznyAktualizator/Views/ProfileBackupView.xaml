@@ -1,0 +1,119 @@
+﻿<UserControl x:Class="BezpiecznyAktualizator.Views.ProfileBackupView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:l="clr-namespace:BezpiecznyAktualizator.Services"
+             IsVisibleChanged="View_IsVisibleChanged">
+    <DockPanel Margin="4,12,4,4">
+        <DockPanel DockPanel.Dock="Bottom" Margin="2,8,2,0">
+            <Button x:Name="CancelButton" DockPanel.Dock="Right" Content="{l:Tr 'Anuluj'}" Padding="12,4" Margin="8,0,0,0"
+                    Visibility="Collapsed" Click="Cancel_Click" />
+            <ProgressBar x:Name="Progress" DockPanel.Dock="Right" Width="220" Visibility="Hidden" VerticalAlignment="Center" />
+            <TextBlock x:Name="StatusText" Style="{StaticResource Secondary}" Text="{l:Tr 'Gotowy.'}"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </DockPanel>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="3*" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="2*" MinHeight="80" />
+            </Grid.RowDefinitions>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid x:Name="Toolbar" VerticalAlignment="Top">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="12" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <DockPanel Grid.ColumnSpan="3" Margin="0,0,0,8">
+                    <Button x:Name="ElevateButton" DockPanel.Dock="Right" Style="{StaticResource ToolButton}" Tag="&#xE7EF;"
+                            Content="{l:Tr 'Uruchom jako administrator'}" Click="Elevate_Click" />
+                    <Button DockPanel.Dock="Right" Style="{StaticResource ToolButton}" Tag="&#xE72C;"
+                            Content="{l:Tr 'Odśwież listę użytkowników'}" Click="RefreshUsers_Click" />
+                    <TextBlock Style="{StaticResource Secondary}" TextWrapping="Wrap" VerticalAlignment="Center"
+                               Text="{l:Tr 'Utwórz paczkę z folderami wybranego użytkownika, przenieś ją na inny komputer (np. pendrive) i odtwórz pliki. Każdy plik ma sumę SHA256 sprawdzaną przed przywróceniem; hasło szyfruje paczkę algorytmem AES-256.'}" />
+                </DockPanel>
+
+                <!-- Tworzenie paczki -->
+                <Border Grid.Row="1" Style="{StaticResource Card}" Padding="14">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE8F1;" Margin="0,0,8,0" />
+                            <TextBlock FontWeight="SemiBold" Text="{l:Tr 'Utwórz paczkę profilu'}" />
+                        </StackPanel>
+                        <TextBlock Text="{l:Tr 'Użytkownik:'}" Margin="0,0,0,4" />
+                        <ComboBox x:Name="SourceUser" DisplayMemberPath="Display" SelectionChanged="SourceUser_Changed"
+                                  AutomationProperties.Name="{l:Tr 'Użytkownik:'}" />
+                        <TextBlock Text="{l:Tr 'Foldery:'}" Margin="0,10,0,4" />
+                        <ItemsControl x:Name="FolderList">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <UniformGrid Columns="2" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <CheckBox Content="{Binding Name}" IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                              ToolTip="{Binding Path}" Margin="0,0,8,2" Checked="Folder_Changed" Unchecked="Folder_Changed" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="EstimateText" Style="{StaticResource Secondary}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                        <TextBlock Text="{l:Tr 'Hasło (opcjonalnie, szyfruje paczkę):'}" Margin="0,10,0,4" />
+                        <PasswordBox x:Name="CreatePassword" AutomationProperties.Name="{l:Tr 'Hasło (opcjonalnie, szyfruje paczkę):'}" />
+                        <TextBlock Text="{l:Tr 'Powtórz hasło:'}" Margin="0,6,0,4" />
+                        <PasswordBox x:Name="CreatePasswordRepeat" AutomationProperties.Name="{l:Tr 'Powtórz hasło:'}" />
+                        <WrapPanel Margin="0,12,0,0">
+                            <Button Style="{StaticResource ToolButton}" Tag="&#xE9D9;" Content="{l:Tr 'Oszacuj rozmiar'}" Click="Estimate_Click" />
+                            <Button Style="{StaticResource AccentToolButton}" Tag="&#xE74E;" Content="{l:Tr 'Utwórz paczkę...'}" Click="Create_Click" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Przywracanie -->
+                <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource Card}" Padding="14">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE777;" Margin="0,0,8,0" />
+                            <TextBlock FontWeight="SemiBold" Text="{l:Tr 'Przywróć z paczki'}" />
+                        </StackPanel>
+                        <TextBlock Text="{l:Tr 'Paczka:'}" Margin="0,0,0,4" />
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="{l:Tr 'Wybierz...'}" Padding="12,4" Margin="8,0,0,0" Click="BrowsePackage_Click" />
+                            <TextBox x:Name="PackagePath" IsReadOnly="True" AutomationProperties.Name="{l:Tr 'Paczka:'}" />
+                        </DockPanel>
+                        <TextBlock Text="{l:Tr 'Hasło paczki (jeśli zaszyfrowana):'}" Margin="0,10,0,4" />
+                        <PasswordBox x:Name="RestorePassword" AutomationProperties.Name="{l:Tr 'Hasło paczki (jeśli zaszyfrowana):'}" />
+                        <TextBlock Text="{l:Tr 'Przywróć do:'}" Margin="0,10,0,4" />
+                        <RadioButton x:Name="ToProfile" GroupName="RestoreTarget" IsChecked="True" Content="{l:Tr 'Folderów profilu użytkownika'}" />
+                        <ComboBox x:Name="TargetUser" DisplayMemberPath="Display" Margin="24,4,0,0"
+                                  IsEnabled="{Binding IsChecked, ElementName=ToProfile}" AutomationProperties.Name="{l:Tr 'Folderów profilu użytkownika'}" />
+                        <RadioButton x:Name="ToFolder" GroupName="RestoreTarget" Margin="0,8,0,0" Content="{l:Tr 'Wybranego folderu (podfoldery według nazw)'}" />
+                        <DockPanel Margin="24,4,0,0" IsEnabled="{Binding IsChecked, ElementName=ToFolder}">
+                            <Button DockPanel.Dock="Right" Content="{l:Tr 'Wybierz...'}" Padding="12,4" Margin="8,0,0,0" Click="BrowseTarget_Click" />
+                            <TextBox x:Name="TargetFolder" IsReadOnly="True" AutomationProperties.Name="{l:Tr 'Wybranego folderu (podfoldery według nazw)'}" />
+                        </DockPanel>
+                        <TextBlock Text="{l:Tr 'Gdy plik już istnieje:'}" Margin="0,10,0,4" />
+                        <ComboBox x:Name="ConflictBox" DisplayMemberPath="Name" AutomationProperties.Name="{l:Tr 'Gdy plik już istnieje:'}" />
+                        <WrapPanel Margin="0,12,0,0">
+                            <Button Style="{StaticResource ToolButton}" Tag="&#xE9D5;" Content="{l:Tr 'Weryfikuj paczkę'}" Click="Verify_Click" />
+                            <Button Style="{StaticResource AccentToolButton}" Tag="&#xE777;" Content="{l:Tr 'Przywróć'}" Click="Restore_Click" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+            </ScrollViewer>
+            <TabControl x:Name="BottomTabs" Grid.Row="2">
+                <TabItem Header="{l:Tr 'Szczegóły'}">
+                    <TextBox x:Name="Details" Style="{StaticResource LogBox}" />
+                </TabItem>
+                <TabItem Header="{l:Tr 'Dziennik'}">
+                    <TextBox x:Name="LogBox" Style="{StaticResource LogBox}" />
+                </TabItem>
+            </TabControl>
+        </Grid>
+    </DockPanel>
+</UserControl>

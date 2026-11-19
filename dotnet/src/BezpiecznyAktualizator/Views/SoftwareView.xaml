@@ -12,6 +12,8 @@
             <Button x:Name="AntivirusButton" Style="{StaticResource ToolButton}" Tag="&#xE72E;" Content="{l:Tr 'Sprawdź antywirusa'}" Click="Antivirus_Click"
                     ToolTip="{l:Tr 'Pokazuje antywirusy zgłoszone do Zabezpieczeń Windows i ich stan. Samo wykrycie nie skanuje instalatora.'}" />
             <Button Style="{StaticResource AccentToolButton}" Tag="&#xE896;" Content="{l:Tr 'Aktualizuj zaznaczone'}" Click="Upgrade_Click" />
+            <Button Style="{StaticResource ToolButton}" Tag="&#xE99A;" Content="{l:Tr 'Zapytaj agenta AI'}" Click="AskAgent_Click"
+                    ToolTip="{l:Tr 'Lokalny agent AI ocenia dostępne aktualizacje i zaznacza te, które zaleca zainstalować. Instalację uruchamiasz sam.'}" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE7BA;" Content="{l:Tr 'Sprawdź podatności i wsparcie'}" Click="Risk_Click"
                     ToolTip="{l:Tr 'Sprawdza znane podatności (CVE) zainstalowanych wersji w bazie NVD oraz wsparcie producenta (endoflife.date, aktywność projektu). Dotyczy zaznaczonych programów, a gdy nic nie zaznaczono - wszystkich.'}" />
             <Button Style="{StaticResource ToolButton}" Tag="&#xE7A7;" Content="{l:Tr 'Historia i wycofanie'}" Click="History_Click" />

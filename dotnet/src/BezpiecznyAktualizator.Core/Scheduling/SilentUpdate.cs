@@ -147,12 +147,13 @@ public sealed class ScheduleState
     public string DriverError { get; set; } = "";
     public int Retries { get; set; }
     public bool Interrupted { get; set; }
+    public bool BackupFailed { get; set; }
     public string Error { get; set; } = "";
     public DateTimeOffset? LastAttempt { get; set; }
     public string SkipReason { get; set; } = "";
     [JsonIgnore] public string LoadError { get; private set; } = "";
     [JsonIgnore] public bool HasErrors => LoadError.Length > 0 || Error.Length > 0 || WindowsUpdateError.Length > 0 ||
-                                          DriverError.Length > 0 || Failed.Count > 0;
+                                          DriverError.Length > 0 || Failed.Count > 0 || BackupFailed;
 
     /// <summary>Czy od ostatniego uruchomienia minął wymagany odstęp.</summary>
     public bool IsDue(DateTimeOffset now, int minIntervalHours) =>

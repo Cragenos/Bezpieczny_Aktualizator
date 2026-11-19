@@ -9,7 +9,8 @@ Wersja aplikacji napisana w C# na .NET 10 z interfejsem WPF, rozwijająca funkcj
   - aktualizacja przez winget;
   - sprawdzanie podatności w NVD i OSV, ocen EPSS oraz oznaczanie programów z lukami jako **pilne**;
   - wykrywanie programów nieobsługiwanych (EOL) i porzuconych;
-  - skanowanie pobranego instalatora programem Microsoft Defender, z użyciem podpisanego skanera ESET gdy Defender jest niedostępny;
+  - skanowanie pobranego instalatora programem Microsoft Defender, a gdy jest niedostępny — zaufanym skanerem ESET i następnie AMSI aktywnego antywirusa;
+  - tworzenie punktu przywracania Windows przed instalacją lub aktualizacją (domyślnie włączone);
   - anulowanie długich skanów, sprawdzania repozytoriów, ocen źródeł, kontroli podatności oraz wyszukiwania aktualizacji Windows i sterowników; instalacje pozostają nieprzerywane;
   - historia aktualizacji i wycofanie do poprzedniej wersji;
   - eksport raportu do CSV, JSON i PDF.
@@ -17,7 +18,7 @@ Wersja aplikacji napisana w C# na .NET 10 z interfejsem WPF, rozwijająca funkcj
   - inwentaryzacja przez WMI (`Win32_PnPSignedDriver` i `Win32_PnPEntity`), w tym urządzenia z problemami;
   - wyszukiwanie nowszych wersji w Windows Update przez API Windows Update Agent (COM), z możliwością anulowania;
   - ocena źródła;
-  - instalacja z podniesionymi uprawnieniami (UAC) z opcjonalnym punktem przywracania.
+  - instalacja z podniesionymi uprawnieniami (UAC), z punktem przywracania zgodnie z ustawieniem kopii bezpieczeństwa.
 - **Windows Update**:
   - wyszukiwanie aktualizacji oprogramowania i identyfikatorów CVE dostępnych w metadanych Windows Update;
   - osobne pobieranie i ręczna instalacja wybranych aktualizacji;
@@ -27,6 +28,8 @@ Wersja aplikacji napisana w C# na .NET 10 z interfejsem WPF, rozwijająca funkcj
   - otwieranie strony aktualizacji Microsoft Store, która może pokazać aplikacje niewykryte przez WinGet.
 - **Program**: ikona w nagłówku, pasku tytułu, pasku zadań i zasobniku; powiadomienia o aktualizacjach, podpisana aktualizacja aplikacji z GitHub Releases i instalator MSI.
 - **Diagnostyka**: historia ostrzeżeń i błędów z dziennika syslog, podgląd zanonimizowanego pakietu diagnostycznego przed zapisem oraz opcjonalne powiadomienia e-mail/Teams.
+- **Lokalny agent AI** (opcjonalny): model językowy uruchomiony na tym komputerze (Ollama, LM Studio, llama.cpp, LocalAI) wybiera, które z dozwolonych aktualizacji zainstalować teraz, a które odłożyć — zob. „Lokalny agent AI”.
+- **Kopia profilu**: paczka z folderami wybranego użytkownika Windows (Pulpit, Dokumenty, Obrazy itd.) do przeniesienia na inny komputer i odtworzenia, z sumami SHA256 i opcjonalnym szyfrowaniem hasłem — zob. „Kopia i migracja profilu użytkownika”.
 
 W menu **Sprawdzanie przy starcie** można opcjonalnie włączyć wydania testowe aplikacji. Są one wyświetlane z fragmentem informacji o wydaniu, ale nie są pobierane ani instalowane automatycznie. Przed zapisaniem pakietu diagnostycznego sprawdź jego podgląd, a przed udostępnieniem również zapisany plik, ponieważ wpisy dziennika mogą ujawniać nazwy programów lub ścieżki. Wersja MSI używa wyłącznie numeru liczbowego z tagu wydania, dlatego stabilne wydanie po wersji testowej musi mieć wyższy numer liczbowy (np. po `v2.2.0-rc.1` użyj `v2.2.1`), aby aplikacja wykryła aktualizację.
 
@@ -38,9 +41,19 @@ W menu **Sprawdzanie przy starcie** można opcjonalnie włączyć wydania testow
 
 Zakładka Microsoft Store wymaga WinGet obsługującego `source export` i oficjalnie skonfigurowanego źródła `msstore`. Wyszukiwanie jest uruchamiane ręcznie po potwierdzeniu: WinGet może przekazać Microsoft informacje o zainstalowanych aplikacjach i zaakceptować warunki źródła. Dostępność i wersje zależą od danych Store i bieżącego konta; WinGet nie wykrywa wszystkich aktualizacji, a pozycje bez potwierdzonych wersji nie są wymuszane ani ponownie instalowane. Jeżeli WinGet nie zwróci tabeli wyników, program pokaże jego komunikat zamiast uznawać go za potwierdzenie braku aktualizacji. Instalacja wybranych pozycji przestrzega wykluczeń i może zaakceptować warunki pakietu. Program przekazuje WinGet rozpoznaną wersję, ale Microsoft Store może zainstalować nowszą; dlatego przy aktywnym wstrzymaniu wersji aktualizacja z `msstore` jest blokowana również w zakładce programów i harmonogramie, a wycofanie do wcześniejszej wersji jest niedostępne. Zgodność zainstalowanej wersji jest sprawdzana po aktualizacji w zakładce Microsoft Store, a niepotwierdzony wynik nie jest zapisywany jako sukces. WinGet lub Microsoft Store obsługują pobranie i instalację; program nie skanuje dodatkowo pliku Store w Microsoft Defender. Aktualizacje wykonane bezpośrednio w aplikacji Microsoft Store nie podlegają zasadom Bezpiecznego Aktualizatora.
 
+## Kopia systemu i skanowanie przed instalacją
+
+Ustawienie **Twórz punkt przywracania systemu przed instalacją** jest domyślnie włączone. Przed aktualizacją z WinGet, wycofaniem, instalacją przez Microsoft Store, instalacją pobranego pakietu MSU, aktualizacją sterownika oraz aktualizacją samego programu aplikacja sprawdza istniejący punkt z ostatnich 24 godzin lub próbuje utworzyć nowy. Wymaga to włączonej Ochrony systemu. Gdy nie można potwierdzić punktu, instalacja interaktywna wymaga jawnej zgody na kontynuację bez niego; cichy harmonogram pomija instalację i zgłasza błąd zadania. Użytkownik może wyłączyć ustawienie w menu aplikacji.
+
+Punkt przywracania Windows **nie jest pełną kopią zapasową**: nie zabezpiecza plików osobistych, a możliwość cofnięcia zmian zależy od Ochrony systemu, dostępnego miejsca i obsługi danego składnika przez Windows. Windows może ograniczyć tworzenie nowych punktów (zwykle do jednego na 24 godziny), dlatego aplikacja może użyć istniejącego punktu z tego okresu. Przed aktualizacją samej aplikacji dodatkowo tworzona jest osobna kopia jej ustawień i historii.
+
+Pliki pobierane przez aplikację dla instalacji są skanowane dostępnym, zaufanym antywirusem: Microsoft Defender, następnie ESET, a gdy te nie są dostępne — przez AMSI, o ile aktywny antywirus udostępnia zaufanego dostawcę. Wykryte zagrożenie blokuje instalację; brak skanera wymaga jawnej decyzji użytkownika (w harmonogramie instalacja bez skanowania jest domyślnie zabroniona). Aktualizacje pobierane i instalowane wewnętrznie przez usługę Windows Update lub Microsoft Store nie udostępniają aplikacji pliku do niezależnego skanowania; pobrany przez użytkownika pakiet MSU jest skanowany przed uruchomieniem instalatora.
+
 Integracja z WinGet uruchamia wyłącznie `winget.exe` z zarejestrowanego pakietu Microsoft App Installer o podpisie Microsoft; nie wybiera przypadkowego pliku `winget` z `PATH`. Dla aktualizacji z repozytorium program pobiera jeden instalator i jego manifest, wymaga sumy SHA-256, zgodności identyfikatora pakietu i wersji oraz wiąże skanowanie z tym samym lokalnym manifestem używanym do instalacji. Zależności nie są pobierane jako dodatkowe instalatory, a błędy kontroli blokują instalację. Aktualizacje Store są osobne, ręczne i wymagają potwierdzenia przez Store. Jeśli plik historii aktualizacji jest uszkodzony lub nie można go zapisać, błąd jest jawnie zgłaszany; aplikacja nie zastępuje historii pustą listą.
 
-Instalacja i wycofanie ze zweryfikowanego manifestu wymagają ustawienia administracyjnego WinGet `LocalManifestFiles=true`. Aplikacja odczytuje je przez `winget settings export` przed pobieraniem instalatora do instalacji oraz ponownie przed uruchomieniem instalacji. Wyłączone lub nieczytelne ustawienie zatrzymuje tę operację z komunikatem, zamiast wyświetlać pomoc WinGet i kod `0x8A150002`. Program nie włącza tej polityki, nie podnosi w tym celu uprawnień i nie przechodzi na instalację bez zweryfikowanego manifestu; decyzja o polityce należy do administratora. Sama weryfikacja pliku w bibliotece nie wymaga włączania tej opcji. Niedostępny Defender uruchamia skan ESET tylko wtedy, gdy produkt jest aktywny w Zabezpieczeniach Windows, a `ecls.exe` w znanej lokalizacji ma prawidłowy podpis Authenticode wydawcy ESET. Skanowanie ESET nie wykonuje czyszczenia pliku; wykrycie blokuje instalację, a brak/awaria skanera nadal wymaga osobnej zgody na pominięcie skanu. Samo wykrycie antywirusa, podpis instalatora ani jego suma kontrolna nie oznaczają wykonania skanu.
+Przy aktualizacji programu wykrytego w rejestrze aplikacja uwzględnia znacznik `WindowsInstaller`: dla MSI wybiera MSI/WiX, a dla EXE jedną ze zgodnych technologii EXE/Nullsoft/Inno/Burn. Zapobiega to pobieraniu MSI dla zainstalowanego EXE (np. 7-Zip) i błędowi zmiany technologii instalacji. Inny zgodny typ jest sprawdzany tylko po błędzie braku odpowiedniego instalatora `0x8A150010`; błąd pobierania lub sumy kontrolnej zatrzymuje operację. Nie jest wymuszane odinstalowanie ani przejście EXE–MSI. Dla pakietów bez wpisu w rejestrze pozostaje standardowy dobór WinGet.
+
+Instalacja i wycofanie ze zweryfikowanego manifestu wymagają ustawienia administracyjnego WinGet `LocalManifestFiles=true`. Aplikacja odczytuje je przez `winget settings export` przed pobieraniem instalatora do instalacji oraz ponownie przed uruchomieniem instalacji. Gdy ustawienie jest wyłączone, aplikacja wyjaśnia, że jego włączenie zmienia konfigurację WinGet dla całego konta, i pyta o zgodę. Po potwierdzeniu uruchamia wyłącznie `winget settings --enable LocalManifestFiles` z monitem UAC, a następnie ponownie odczytuje ustawienie; odmowa zgody, anulowanie UAC, błąd lub niepotwierdzona zmiana zatrzymują zweryfikowaną instalację. Aplikacja nigdy nie przechodzi na instalację bez zweryfikowanego manifestu. Nieczytelne ustawienie również zatrzymuje operację z komunikatem, zamiast wyświetlać pomoc WinGet i kod `0x8A150002`. Sama weryfikacja pliku w bibliotece nie wymaga włączania tej opcji. Gdy Defender jest niedostępny, ESET jest używany tylko wtedy, gdy produkt jest aktywny w Zabezpieczeniach Windows, a `ecls.exe` w znanej lokalizacji ma prawidłowy podpis Authenticode wydawcy ESET; jeśli i ten skaner jest niedostępny, aplikacja sprawdza zaufanego dostawcę AMSI aktywnego antywirusa. Skanowanie nie wykonuje czyszczenia pliku; wykrycie blokuje instalację, a brak/awaria skanerów nadal wymaga osobnej zgody na pominięcie skanu. Samo wykrycie antywirusa, podpis instalatora ani jego suma kontrolna nie oznaczają wykonania skanu.
 
 Polecenia WinGet uruchamiane przez jeden proces aplikacji nie nakładają się. Odczyt listy, wyszukiwanie i odczyt metadanych po błędzie pamięci podręcznej źródła `0x80071130` są ponawiane jeden raz po sekundzie, z ostrzeżeniem w syslog. Ponowne niepowodzenie jest zgłaszane jawnie. Instalacje, pobieranie i zmiany źródeł nie są automatycznie ponawiane przez ten mechanizm; program nie resetuje źródeł ani nie usuwa pamięci podręcznej. Nie wyklucza to konfliktów z innymi procesami WinGet uruchomionymi poza aplikacją.
 
@@ -283,7 +296,7 @@ Opcje okna:
 - **Nie częściej niż co**: 4–168 godz. (domyślnie 24);
 - **Okno serwisowe** (w tym zakres przechodzący przez północ), pomijanie instalacji na baterii i w sieci taryfowej lub o nieznanym koszcie;
 - **Ponowienia instalacji**: 0–3 próby z opóźnieniem 30/60/90 sekund;
-- **Sterowniki**: sprawdzanie w Windows Update (domyślnie włączone) oraz opcjonalna automatyczna instalacja z punktem przywracania systemu (domyślnie wyłączona);
+- **Sterowniki**: sprawdzanie w Windows Update (domyślnie włączone) oraz opcjonalna automatyczna instalacja (domyślnie wyłączona); przed instalacją tworzony jest punkt przywracania, jeśli globalne ustawienie kopii bezpieczeństwa jest włączone;
 - **Windows Update**: opcjonalne sprawdzanie (domyślnie wyłączone) oraz osobna, domyślnie wyłączona instalacja wyłącznie aktualizacji oznaczonych przez WUA jako obowiązkowe, z wcześniej zaakceptowaną licencją;
 - **Zasady aktualizacji**: podsumowanie wymaganego poziomu zaufania, wykluczeń i wstrzymanych wersji oraz przycisk otwierający okno zasad (zobacz [Zasady aktualizacji](#zasady-aktualizacji));
 - **Uruchom teraz** — natychmiastowe ciche sprawdzanie z ustawieniami z okna.
@@ -303,17 +316,57 @@ Przebieg cichego uruchomienia (`BezpiecznyAktualizator.exe --scheduled`, bez okn
 3. Skanuje programy i sprawdza aktualizacje w winget / Microsoft Store. Pomija programy wykluczone i wstrzymane przez zasady aktualizacji (powód trafia do dziennika, MSGID `POLICY`).
 4. Dla każdej aktualizacji:
    - ocenia źródło i akceptuje tylko poziom zaufania wymagany przez zasady;
-   - pobiera i weryfikuje instalator (suma SHA-256 z manifestu, pliki kontrolne wydawcy, podpis Authenticode, skanowanie Defendera lub — gdy jest niedostępny — zaufanego ESET);
+   - pobiera i weryfikuje instalator (suma SHA-256 z manifestu, pliki kontrolne wydawcy, podpis Authenticode, skanowanie Defendera, zaufanego ESET lub AMSI aktywnego antywirusa);
    - instaluje przez winget **dokładnie zweryfikowaną wersję**.
    
-   Pakiety, których nie da się w pełni zweryfikować, są **pomijane**. Jeśli niedostępny jest również zaufany skaner ESET, harmonogram pomija aktualizację, chyba że w ustawieniach zaznaczono opcję instalacji bez skanowania (domyślnie wyłączoną). Program w oknie w takiej sytuacji pyta użytkownika.
-5. Przed każdym kolejnym pakietem sprawdza, czy użytkownik wrócił do komputera (aktywność w ostatniej minucie). Jeśli tak, przerywa. Rozpoczęta instalacja nigdy nie jest przerywana.
+   Pakiety, których nie da się w pełni zweryfikować, są **pomijane**. Jeśli żaden zaufany skaner (Defender, ESET ani AMSI aktywnego antywirusa) nie jest dostępny, harmonogram pomija aktualizację, chyba że w ustawieniach zaznaczono opcję instalacji bez skanowania (domyślnie wyłączoną). Program w oknie w takiej sytuacji pyta użytkownika.
+5. Przed każdą instalacją tworzy jeden punkt przywracania na cały przebieg (jeśli ustawienie kopii jest włączone); bez potwierdzonego punktu pomija instalacje, zapisuje błąd i zwraca niezerowy kod zadania. Przed każdym kolejnym pakietem sprawdza też, czy użytkownik wrócił do komputera (aktywność w ostatniej minucie). Jeśli tak, przerywa. Rozpoczęta instalacja nigdy nie jest przerywana.
 6. Opcjonalnie sprawdza aktualizacje Windows. Automatyczna instalacja wymaga włączenia obu opcji, oznaczenia aktualizacji jako obowiązkowej i wcześniej zaakceptowanej licencji. W przypadku błędu lub potrzeby restartu dalsza instalacja aktualizacji Windows jest zatrzymywana.
 7. Sprawdza sterowniki w Windows Update. Instaluje je tylko po zaznaczeniu tej opcji, zawsze z punktem przywracania.
 8. Zapisuje wynik w `%LOCALAPPDATA%\BezpiecznyAktualizator\schedule-state.json` i w dzienniku syslog (MSGID `SCHEDULED`, `SW_UPGRADE`, `SW_VERIFY`, `DRV_INSTALL`, `WINDOWS_UPDATE`). Podsumowanie pojawia się na pasku informacyjnym przy następnym otwarciu programu.
 9. Po zakończeniu może wysłać podsumowanie e-mailem przez SMTP/TLS albo webhookiem Teams. Niepowodzenia kanału są zapisywane jako ostrzeżenia, bez ujawniania sekretu.
 
 Bez uprawnień administratora (konto standardowe) ciche uruchomienie tylko sprawdza dostępne wersje. Ustawienia są zapisywane w `settings.json` (klucz `schedule`). Deinstalator usuwa zadania z folderu `\BezpiecznyAktualizator`.
+
+## Lokalny agent AI
+
+Menu nagłówka **Lokalny agent AI...** podłącza model językowy działający na tym komputerze przez API zgodne z OpenAI (`GET /models`, `POST /chat/completions`). Typowe adresy:
+
+| Serwer | Adres API |
+|---|---|
+| [Ollama](https://github.com/ollama/ollama) | `http://127.0.0.1:11434/v1` |
+| [LM Studio](https://lmstudio.ai/) | `http://127.0.0.1:1234/v1` |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) (`llama-server`) | `http://127.0.0.1:8080/v1` |
+
+Przycisk **Testuj połączenie** pobiera listę modeli. Opcjonalne wskazówki (np. „nie aktualizuj przeglądarek w dni robocze”) są dołączane do zapytania.
+
+- **Zakładka Oprogramowanie → Zapytaj agenta AI**: agent ocenia dostępne aktualizacje dozwolone przez zasady (bez Microsoft Store), zaznacza zalecane na liście i zapisuje uzasadnienia w dzienniku. Instalację uruchamia użytkownik przyciskiem **Aktualizuj zaznaczone**.
+- **Harmonogram**: gdy opcja „Ciche aktualizacje instalują tylko programy zatwierdzone przez agenta” jest włączona, przed instalacją harmonogram wysyła agentowi listę kandydatów i instaluje tylko pozycje z jednoznaczną zgodą (`"install": true`). Gdy agent jest niedostępny, przekroczy limit czasu lub odpowie nieprawidłowo, ciche instalacje programów są pomijane.
+
+Ograniczenia bezpieczeństwa:
+
+- adres musi wskazywać pętlę zwrotną (`localhost`, `127.0.0.0/8`, `[::1]`) przez HTTP/HTTPS, bez danych logowania; klient nie używa proxy ani przekierowań, a odpowiedź jest ograniczona do 1 MB;
+- agent otrzymuje tylko identyfikator, nazwę, wydawcę, wersje, źródło i ocenę ryzyka pakietu — bez ścieżek, kluczy rejestru i danych użytkownika;
+- agent może jedynie zawęzić listę: nieznane identyfikatory, wartości inne niż logiczne `true` i sprzeczne decyzje są traktowane jako odrzucenie. Weryfikacja sum kontrolnych i podpisu, punkt przywracania oraz skanowanie antywirusowe działają zawsze;
+- decyzje są zapisywane w dzienniku z MSGID `AI_AGENT`, a ustawienia w `settings.json` (klucz `localAgent`).
+
+## Kopia i migracja profilu użytkownika
+
+Zakładka **Kopia profilu** tworzy paczkę `*.baprofile` z folderami wybranego użytkownika Windows, którą można przenieść (np. na pendrive) na inny komputer i tam odtworzyć.
+
+1. **Utwórz paczkę profilu**: wybierz użytkownika (lista z rejestru `ProfileList`, bez kont systemowych) i foldery: Pulpit, Dokumenty, Obrazy, Muzyka, Wideo, Pobrane, Ulubione oraz opcjonalnie ustawienia programów (`AppData\Roaming`). Dla bieżącego użytkownika uwzględniane są foldery przekierowane, np. do OneDrive. **Oszacuj rozmiar** liczy pliki przed spakowaniem.
+2. Opcjonalne **hasło** (min. 8 znaków) szyfruje całą paczkę: klucz z PBKDF2-SHA256 (600 000 iteracji, losowa sól), AES-256-GCM w porcjach po 1 MiB z uwierzytelnieniem kolejności i końca pliku. Bez hasła program ostrzega, że paczkę odczyta każdy, kto ją otrzyma. Hasła nie da się odzyskać.
+3. **Przywróć z paczki** na drugim komputerze: wybierz plik, podaj hasło, a następnie cel — foldery profilu wybranego użytkownika albo dowolny folder (podfoldery `Desktop`, `Documents`…). Dla istniejących plików wybierz: pomiń, zachowaj oba (np. `raport (2).docx`) lub zastąp — zastępowane pliki są przenoszone do folderu `BezpiecznyAktualizator-kopia-przed-przywroceniem-<data>`.
+
+Zabezpieczenia:
+
+- paczka to archiwum ZIP z `manifest.json` (komputer, użytkownik, data, lista plików z rozmiarem i SHA256); przed przywróceniem cała paczka jest weryfikowana i przy jakiejkolwiek niezgodności nic nie jest zapisywane, a każdy plik jest ponownie sprawdzany przy zapisie (najpierw do pliku `.partial`);
+- odrzucane są paczki z plikami spoza manifestu oraz ścieżkami z `..`, dyskami, strumieniami NTFS lub nazwami zarezerwowanymi (ochrona przed „zip slip”); program nie zapisuje przez dowiązania (junction/symlink) w folderze docelowym;
+- przy pakowaniu pomijane są dowiązania (np. `Moje dokumenty`, linki do innych dysków), pliki tymczasowe i blokady Office (`~$*`, `*.tmp`), `NTUSER.DAT` oraz pliki zablokowane przez inne programy — lista pominiętych trafia do dziennika;
+- dostęp do profilu innego użytkownika wymaga uprawnień administratora — program proponuje ponowne uruchomienie przez UAC;
+- po utworzeniu paczki dziennik zawiera jej sumę SHA256 do porównania na drugim komputerze; operacje są zapisywane z MSGID `PROFILE_BACKUP`.
+
+Paczka przenosi pliki użytkownika, a nie zainstalowane programy, konta, hasła zapisane w systemie (DPAPI) ani ustawienia rejestru.
 
 ## Zasady aktualizacji
 
@@ -429,7 +482,7 @@ Przycisk **Historia i wycofanie** pokazuje listę zmian. Po wybraniu aktualizacj
 
 > Wycofanie przywraca wersję programu, nie jego dane ani ustawienia. Część instalatorów nie pozwala zainstalować starszej wersji na nowszą. Wtedy należy najpierw odinstalować program.
 
-Przed aktualizacją samego Bezpiecznego Aktualizatora tworzona i weryfikowana jest kopia jego ustawień, historii oraz stanu harmonogramu w `%LOCALAPPDATA%\BezpiecznyAktualizator\Backups` (maksymalnie 10 archiwów z manifestem SHA-256). Z menu głównego można wybrać **Przywróć kopię ustawień...**: aplikacja weryfikuje archiwum, tworzy kopię bieżącego stanu, zachowuje aktualny klucz API NVD i po przywróceniu zaleca ponowne uruchomienie. Klucz API NVD nie jest zapisywany w kopii. To kopia danych aktualizatora, nie programów zewnętrznych; nie przywraca danych użytkownika ani nie zastępuje punktu przywracania Windows.
+Przed aktualizacją samego Bezpiecznego Aktualizatora tworzony jest punkt przywracania Windows (gdy globalne ustawienie kopii jest włączone) oraz weryfikowana kopia jego ustawień, historii i stanu harmonogramu w `%LOCALAPPDATA%\BezpiecznyAktualizator\Backups` (maksymalnie 10 archiwów z manifestem SHA-256). Z menu głównego można wybrać **Przywróć kopię ustawień...**: aplikacja weryfikuje archiwum, tworzy kopię bieżącego stanu, zachowuje aktualny klucz API NVD i po przywróceniu zaleca ponowne uruchomienie. Klucz API NVD nie jest zapisywany w kopii. To kopia danych aktualizatora, nie programów zewnętrznych; nie przywraca danych użytkownika ani nie zastępuje punktu przywracania Windows.
 
 **Eksport i diagnostyka:** przycisk **Eksportuj raport** zapisuje CSV/JSON albo czytelny, wielostronicowy PDF. Menu nagłówka zawiera **Historia ostrzeżeń i błędów...**, która przegląda bieżący syslog i archiwa. Konfiguracja **Powiadomienia...** pozwala włączyć e-mail przez SMTP/TLS lub webhook Teams; URL webhooka i hasło SMTP są szyfrowane DPAPI dla bieżącego konta Windows, a dziennik nie zapisuje ich wartości.
 
@@ -446,6 +499,8 @@ dotnet/
 │  │  ├─ Models/        Software.cs
 │  │  ├─ Scheduling/    SilentUpdate.cs             (opcje, stan, zadanie Harmonogramu zadań XML)
 │  │  ├─ Policies/      UpdatePolicies.cs           (wykluczenia, wstrzymane wersje, zaufane źródła, zasady komputera)
+│  │  ├─ Agent/         LocalAgentClient.cs         (lokalny agent AI: API zgodne z OpenAI, tylko localhost)
+│  │  ├─ Profiles/      UserProfiles.cs, ProfilePackage.cs, ProfilePackageCrypto.cs (kopia i migracja profilu użytkownika)
 │  │  ├─ Inventory/     SoftwareInventory.cs        (rejestr Uninstall)
 │  │  ├─ Winget/        WingetClient.cs             (CLI winget, parsowanie wyników)
 │  │  ├─ Catalogs/      CatalogClient.cs            (Scoop Main, Chocolatey Community)
@@ -460,7 +515,7 @@ dotnet/
 │  └─ BezpiecznyAktualizator/            # aplikacja WPF
 │     ├─ App.xaml(.cs)                   # motyw Fluent i wspólne style, tryby bez okna --install-drivers <katalog> i --scheduled
 │     ├─ MainWindow.xaml                 # nagłówek, pasek informacyjny, zakładki „Oprogramowanie” i „Sterowniki”
-│     ├─ Views/         SoftwareView, DriversView, SearchWindow, ScheduleWindow, HistoryWindow, NotificationWindow, LogHistoryWindow,
+│     ├─ Views/         SoftwareView, DriversView, ProfileBackupView, SearchWindow, ScheduleWindow, HistoryWindow, NotificationWindow, LocalAgentWindow, LogHistoryWindow,
 │     │                 PoliciesWindow (zasady aktualizacji), AboutWindow (o programie), MessageDialog (okna komunikatów zgodne z motywem)
 │     ├─ Services/      Ui.cs  (okna dialogowe, BackgroundRunner, raporty), Localization.cs ({l:Tr}, ustawienia),
 │     │                 Theme.cs (motyw systemowy / jasny / ciemny), ScheduledRunner.cs (ciche aktualizacje),

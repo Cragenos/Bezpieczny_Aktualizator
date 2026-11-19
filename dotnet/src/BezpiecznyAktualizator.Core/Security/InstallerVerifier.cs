@@ -116,7 +116,7 @@ public static partial class InstallerVerifier
 
     public static async Task<InstallerVerification> VerifyAsync(string packageId, string source, Action<string>? progress = null,
                                                                 CancellationToken ct = default, string version = "",
-                                                                bool scanWithDefender = true)
+                                                                bool scanWithDefender = true, string installedInstallerType = "")
     {
         var result = new InstallerVerification();
         if (string.Equals(source, "msstore", StringComparison.OrdinalIgnoreCase))
@@ -134,7 +134,7 @@ public static partial class InstallerVerifier
         {
             Directory.CreateDirectory(dir);
             progress?.Invoke(L.T("Pobieranie instalatora do weryfikacji..."));
-            var (code, output) = await WingetClient.DownloadAsync(packageId, dir, source, version, ct);
+            var (code, output) = await WingetClient.DownloadAsync(packageId, dir, source, version, ct, installedInstallerType);
             if (code == WingetClient.HashMismatchCode)
             {
                 result.Checks.Add(new Check(L.Txt("Suma SHA256 zgodna z manifestem winget"), CheckStatus.Fail,

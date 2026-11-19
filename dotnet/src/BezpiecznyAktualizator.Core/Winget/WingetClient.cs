@@ -9,7 +9,7 @@ using BezpiecznyAktualizator.Core.Security;
 
 namespace BezpiecznyAktualizator.Core.Winget;
 
-public sealed class WingetException(string message) : Exception(message);
+public sealed class WingetException(string message, Exception? innerException = null) : Exception(message, innerException);
 
 public sealed record WingetPackage(string Name, string Id, string Version = "", string Available = "", string Source = "")
 {
@@ -278,7 +278,9 @@ public static partial class WingetClient
             args, ct);
         var packages = RowsToPackages(ParseTable(output))
             .Where(package => package.Id.Equals(packageId, StringComparison.OrdinalIgnoreCase) &&
-                              (source.Length == 0 || package.Source.Equals(source, StringComparison.OrdinalIgnoreCase)))
+                              // With --source, winget filters rows itself and omits the Source column.
+                              (source.Length == 0 || package.Source.Length == 0 ||
+                               package.Source.Equals(source, StringComparison.OrdinalIgnoreCase)))
             .ToList();
         if (code == NoApplicationsFound && packages.Count == 0) return null;
         if (code != 0)
@@ -372,8 +374,33 @@ public static partial class WingetClient
 
     /// <summary>Pobiera instalator i jego manifest (.yaml) do katalogu, bez instalowania.</summary>
     public static Task<(int Code, string Output)> DownloadAsync(string packageId, string directory, string source = "",
-                                                               string version = "", CancellationToken ct = default)
-        => RunAsync(DownloadArguments(packageId, directory, source, version), 900, ct);
+                                                               string version = "", CancellationToken ct = default,
+                                                               string installedInstallerType = "")
+        => DownloadCompatibleAsync(packageId, directory, source, version, installedInstallerType,
+            (args, token) => RunAsync(args, 900, token), ct);
+
+    internal static async Task<(int Code, string Output)> DownloadCompatibleAsync(
+        string packageId, string directory, string source, string version, string installedInstallerType,
+        CommandRunner run, CancellationToken ct = default)
+    {
+        // WinGet's download command does not apply the installed-type filter used by upgrade.
+        string[] types = installedInstallerType switch
+        {
+            "exe" => ["exe", "nullsoft", "inno", "burn"],
+            "msi" => ["msi", "wix"],
+            _ => [""],
+        };
+        (int Code, string Output) result = default;
+        foreach (var type in types)
+        {
+            ct.ThrowIfCancellationRequested();
+            var args = DownloadArguments(packageId, directory, source, version);
+            if (type.Length > 0) args.AddRange(["--installer-type", type]);
+            result = await run(args, ct);
+            if (result.Code != unchecked((int)0x8A150010)) return result;
+        }
+        return result;
+    }
 
     internal static List<string> DownloadArguments(string packageId, string directory, string source, string version)
     {
@@ -412,6 +439,54 @@ public static partial class WingetClient
 
     public static Task<bool> IsLocalManifestFilesEnabledAsync(CancellationToken ct = default) =>
         IsLocalManifestFilesEnabledCoreAsync((args, token) => RunAsync(args, ct: token), ct);
+
+    public static async Task EnableLocalManifestFilesElevatedAsync(CancellationToken ct = default)
+    {
+        if (await IsLocalManifestFilesEnabledAsync(ct)) return;
+        var executable = FindExecutable() ?? throw new WingetException(
+            L.T("Nie znaleziono prawidłowo podpisanego programu winget z pakietu Microsoft App Installer. Zainstaluj go z Microsoft Store."));
+        await EnableLocalManifestFilesCoreAsync(
+            (args, token) => RunElevatedAsync(executable, args, token),
+            (args, token) => RunAsync(args, ct: token), ct);
+    }
+
+    internal static async Task EnableLocalManifestFilesCoreAsync(
+        Func<IReadOnlyList<string>, CancellationToken, Task<(int Code, string Output)>> enable,
+        CommandRunner verify, CancellationToken ct = default)
+    {
+        var (code, _) = await enable(["settings", "--enable", "LocalManifestFiles"], ct);
+        if (code != 0)
+            throw new WingetException(L.F("Nie udało się włączyć LocalManifestFiles w WinGet (kod 0x{0:X8}).", code));
+        await EnsureLocalManifestFilesEnabledCoreAsync(verify, ct);
+    }
+
+    private static async Task<(int Code, string Output)> RunElevatedAsync(
+        string executable, IReadOnlyList<string> args, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden,
+        };
+        foreach (var arg in args) start.ArgumentList.Add(arg);
+        try
+        {
+            using var process = Process.Start(start) ??
+                throw new WingetException(L.T("Nie udało się uruchomić winget."));
+            await process.WaitForExitAsync();
+            return (process.ExitCode, "");
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            throw new WingetException(L.T("Anulowano monit kontroli konta użytkownika (UAC)."), ex);
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            throw new WingetException(L.F("Nie udało się uruchomić winget: {0}", ex.Message), ex);
+        }
+    }
 
     internal static async Task EnsureLocalManifestFilesEnabledCoreAsync(CommandRunner run, CancellationToken ct = default)
     {

@@ -22,7 +22,6 @@ public partial class DriversView : UserControl
     public DriversView()
     {
         InitializeComponent();
-        RestorePoint.IsChecked = Settings.BackupBeforeInstall;
         _runner = new BackgroundRunner(this, Toolbar, Progress, StatusText, LogBox, SummaryText, LogEvent.DriverScan,
             cancelButton: CancelOperationButton);
         _view = CreateView();
@@ -260,10 +259,10 @@ public partial class DriversView : UserControl
     private async Task InstallAsync(List<Driver> selection)
     {
         if (Window.GetWindow(this) is MainWindow main && !main.CanStartWindowsUpdate(this)) return;
-        var restore = RestorePoint.IsChecked == true;
+        var restore = Settings.BackupBeforeInstall;
         if (!Ui.Confirm(this, L.T("Instalacja sterowników"), InstallConfirmation(selection, restore), warning: true)) return;
         var ids = selection.Select(d => d.Update!.UpdateId).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var executable = Environment.ProcessPath ?? throw new InvalidOperationException(L.T("Nieznana ścieżka programu."));
+        var executable = InstallBackup.SelfExecutable() ?? throw new InvalidOperationException(L.T("Nieznana ścieżka programu."));
         BottomTabs.SelectedIndex = 1;
 
         List<DriverInstallResult>? results = null;

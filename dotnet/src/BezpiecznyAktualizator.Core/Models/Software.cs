@@ -15,6 +15,7 @@ public sealed partial class Software
     /// <summary>Pochodzenie wpisu, np. "HKLM", "HKLM (32-bit)", "HKCU", "winget".</summary>
     public string Origin { get; set; } = "";
     public string RegKey { get; set; } = "";
+    public string InstalledInstallerType { get; set; } = "";
     public string UrlInfo { get; set; } = "";
     public string UrlUpdate { get; set; } = "";
     public string HelpLink { get; set; } = "";

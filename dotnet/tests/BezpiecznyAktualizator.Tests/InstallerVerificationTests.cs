@@ -252,9 +252,11 @@ public class InstallerVerifierLiveTests
     [Fact]
     public async Task Verifies7Zip()
     {
-        var result = await InstallerVerifier.VerifyAsync("7zip.7zip", "winget");
+        var result = await InstallerVerifier.VerifyAsync("7zip.7zip", "winget", installedInstallerType: "exe");
+        using var installer = result.VerifiedInstaller;
         Assert.True(result.Completed, result.Error?.ToString());
         Assert.False(result.Blocked);
+        Assert.EndsWith(".exe", result.InstallerUrl, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(result.Checks, c => c.Status == CheckStatus.Ok && c.Label.ToString().Contains("wydawcy"));
         // Bez czystego wyniku skanowania (Defender, ESET lub AMSI) instalator nie może zostać uznany za zweryfikowany.
         Assert.Equal(result.AntivirusScanPassed, result.Passed);

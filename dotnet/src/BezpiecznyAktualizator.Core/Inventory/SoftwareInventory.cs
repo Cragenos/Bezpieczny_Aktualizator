@@ -59,6 +59,8 @@ public static class SoftwareInventory
             InstallDate = Str(key, "InstallDate"),
             Origin = origin,
             RegKey = subName,
+            InstalledInstallerType = key.GetValue("WindowsInstaller") is int windowsInstaller && windowsInstaller == 1
+                ? "msi" : "exe",
             UrlInfo = Str(key, "URLInfoAbout"),
             UrlUpdate = Str(key, "URLUpdateInfo"),
             HelpLink = Str(key, "HelpLink"),

@@ -47,6 +47,9 @@ public static class SystemRestorePoint
         _ => 20,
     };
 
+    public static bool IsRecent(DateTime? pointTime, DateTime now) =>
+        pointTime is { } point && point <= now + ClockSkew && now - point <= ReuseWindow;
+
     public static RestorePointResult FromExitCode(int code) => code switch
     {
         0 => new(RestorePointOutcome.Created, null, L.T("Punkt przywracania utworzony.")),
@@ -83,9 +86,13 @@ public static class SystemRestorePoint
 
     internal static RestorePointResult Evaluate(uint returnCode, DateTime? before, DateTime? after, DateTime now)
     {
-        if (after is { } latest && (before is null || latest > before.Value))
+        if (after is { } future && future > now + ClockSkew)
+            return new(RestorePointOutcome.Failed, future,
+                L.T("Nie można zweryfikować punktu przywracania z datą w przyszłości."));
+        if (returnCode == 0 && after is { } latest && (before is null || latest > before.Value) &&
+            IsRecent(latest, now))
             return new(RestorePointOutcome.Created, latest, L.T("Punkt przywracania utworzony."));
-        if (after is { } recent && recent <= now + ClockSkew && now - recent <= ReuseWindow)
+        if (after is { } recent && IsRecent(recent, now))
             return new(RestorePointOutcome.Recent, recent,
                 L.F("Windows nie utworzył nowego punktu przywracania - użyto punktu z {0:yyyy-MM-dd HH:mm}.", recent));
         return new(RestorePointOutcome.Failed, after, returnCode == 0
@@ -93,7 +100,7 @@ public static class SystemRestorePoint
             : L.F("Nie utworzono punktu przywracania (kod {0}). Sprawdź, czy ochrona systemu jest włączona.", returnCode));
     }
 
-    private static DateTime? LatestPointTime()
+    public static DateTime? LatestPointTime()
     {
         using var searcher = new ManagementObjectSearcher(@"root\default", "SELECT CreationTime FROM SystemRestore");
         DateTime? latest = null;

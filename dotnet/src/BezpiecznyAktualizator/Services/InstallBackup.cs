@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Management;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Windows;
 using BezpiecznyAktualizator.Core.Backup;
@@ -13,7 +15,7 @@ namespace BezpiecznyAktualizator.Services;
 /// <summary>Kopia bezpieczeństwa (punkt przywracania systemu) wykonywana przed instalacją lub aktualizacją.</summary>
 internal static class InstallBackup
 {
-    private static DateTime? _lastPoint;
+    private static readonly SemaphoreSlim EnsureLock = new(1, 1);
 
     /// <summary>Plik wykonywalny bieżącego programu (przy uruchomieniu przez dotnet - appHost .exe).</summary>
     public static string? SelfExecutable()
@@ -40,20 +42,46 @@ internal static class InstallBackup
     public static async Task<bool> EnsureAsync(DependencyObject owner, RestorePointPurpose purpose,
                                                Action<string, SyslogSeverity, string?> log)
     {
-        if (!Settings.BackupBeforeInstall) return true;
-        if (_lastPoint is { } last && DateTime.Now - last < SystemRestorePoint.ReuseWindow)
+        await EnsureLock.WaitAsync();
+        try
         {
-            log(L.F("Kopia bezpieczeństwa: używany jest punkt przywracania z {0:yyyy-MM-dd HH:mm}.", last),
-                SyslogSeverity.Informational, LogEvent.Backup);
-            return true;
+            return await EnsureCoreAsync(owner, purpose, log);
+        }
+        finally
+        {
+            EnsureLock.Release();
+        }
+    }
+
+    private static async Task<bool> EnsureCoreAsync(DependencyObject owner, RestorePointPurpose purpose,
+                                                    Action<string, SyslogSeverity, string?> log)
+    {
+        if (!Settings.BackupBeforeInstall) return true;
+        var now = DateTime.Now;
+        var isAdministrator = IsAdministrator();
+        if (isAdministrator)
+        {
+            try
+            {
+                var latestPoint = await Task.Run(SystemRestorePoint.LatestPointTime);
+                if (SystemRestorePoint.IsRecent(latestPoint, now))
+                {
+                    log(L.F("Kopia bezpieczeństwa: używany jest punkt przywracania z {0:yyyy-MM-dd HH:mm}.", latestPoint),
+                        SyslogSeverity.Informational, LogEvent.Backup);
+                    return true;
+                }
+            }
+            catch (Exception ex) when (ex is ManagementException or COMException or UnauthorizedAccessException or
+                                           PlatformNotSupportedException)
+            {
+                log(L.F("Nie można sprawdzić istniejącego punktu przywracania: {0}", ex.Message),
+                    SyslogSeverity.Warning, LogEvent.Backup);
+            }
         }
         log(L.T("Tworzenie punktu przywracania systemu..."), SyslogSeverity.Informational, LogEvent.Backup);
-        var result = await Task.Run(() => IsAdministrator() ? SystemRestorePoint.Create(purpose) : CreateElevated(purpose));
+        var result = await Task.Run(() => isAdministrator ? SystemRestorePoint.Create(purpose) : CreateElevated(purpose));
         if (result.Succeeded)
         {
-            // „Recent” z procesu podniesionego nie zna daty istniejącego punktu (może mieć prawie 24 h) - nie zapamiętuj.
-            if (result.Outcome == RestorePointOutcome.Created) _lastPoint = result.PointTime ?? DateTime.Now;
-            else if (result.PointTime is { } existing) _lastPoint = existing;
             log(result.Detail, SyslogSeverity.Notice, LogEvent.Backup);
             return true;
         }

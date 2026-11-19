@@ -36,6 +36,8 @@ public static class LogEvent
     public const string WindowsUpdate = "WINDOWS_UPDATE";
     public const string StoreUpdate = "STORE_UPDATE";
     public const string Backup = "BACKUP";
+    public const string Agent = "AI_AGENT";
+    public const string ProfileBackup = "PROFILE_BACKUP";
     public const string Error = "ERROR";
 }
 

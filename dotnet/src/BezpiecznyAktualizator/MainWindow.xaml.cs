@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.History;
@@ -107,6 +108,9 @@ public partial class MainWindow : Window
 
     private void Notifications_Click(object sender, RoutedEventArgs e) =>
         new Views.NotificationWindow { Owner = this }.ShowDialog();
+
+    private void LocalAgent_Click(object sender, RoutedEventArgs e) =>
+        new Views.LocalAgentWindow { Owner = this }.ShowDialog();
 
     private void About_Click(object sender, RoutedEventArgs e) => new Views.AboutWindow { Owner = this }.ShowDialog();
 
@@ -223,6 +227,13 @@ public partial class MainWindow : Window
                 catch (Exception deleteError) when (deleteError is IOException or UnauthorizedAccessException) { }
                 return;
             }
+            if (!await InstallBackup.EnsureAsync(this, RestorePointPurpose.Software,
+                    (text, severity, msgId) => Syslog.Write(severity, msgId ?? LogEvent.AppUpdate, text)))
+            {
+                try { File.Delete(installer); }
+                catch (Exception deleteError) when (deleteError is IOException or UnauthorizedAccessException) { }
+                return;
+            }
             var localData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BezpiecznyAktualizator");
             var settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BezpiecznyAktualizator", "settings.json");
             var backup = UpdateStateBackup.Create(Path.Combine(localData, "Backups"), settings, localData, DateTimeOffset.Now);
@@ -283,7 +294,6 @@ public partial class MainWindow : Window
             return;
         }
         Settings.BackupBeforeInstall = enabled;
-        Drivers.RestorePoint.IsChecked = enabled;
         Syslog.Write(enabled ? SyslogSeverity.Informational : SyslogSeverity.Warning, LogEvent.Settings,
             L.F("Punkt przywracania systemu przed instalacją: {0}.", YesNo(enabled)));
     }
@@ -406,6 +416,9 @@ public partial class MainWindow : Window
         _allowClose = true;
         Close();
     }
+
+    internal bool IsAnyOperationRunning =>
+        _checking || Software.IsBusy || Drivers.IsBusy || WindowsUpdates.IsBusy || Store.IsBusy || Profiles.IsBusy;
 
     internal bool CanStartWindowsUpdate(FrameworkElement requester, bool notify = true)
     {

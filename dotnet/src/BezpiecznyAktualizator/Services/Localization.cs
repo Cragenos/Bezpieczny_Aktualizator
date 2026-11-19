@@ -5,6 +5,7 @@ using System.Security;
 using System.Text.Json;
 using System.Windows.Data;
 using System.Windows.Markup;
+using BezpiecznyAktualizator.Core.Agent;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
 using BezpiecznyAktualizator.Core.Policies;
@@ -97,6 +98,7 @@ public static class Settings
         public DateTimeOffset? ScheduleSeen { get; set; }
         public string? NvdApiKey { get; set; }
         public NotificationOptions? Notifications { get; set; }
+        public LocalAgentOptions? LocalAgent { get; set; }
     }
 
     private static readonly JsonSerializerOptions Options = new()
@@ -238,6 +240,13 @@ public static class Settings
 
     public static void SaveNotifications(NotificationOptions value) =>
         Update(d => d.Notifications = value.Normalize());
+
+    /// <summary>Lokalny agent AI zatwierdzający aktualizacje (domyślnie wyłączony).</summary>
+    public static LocalAgentOptions LocalAgent
+    {
+        get => (Read().LocalAgent ?? new LocalAgentOptions()).Normalize();
+        set => Update(d => d.LocalAgent = value.Normalize());
+    }
 
     private static void Update(Action<Data> change)
     {

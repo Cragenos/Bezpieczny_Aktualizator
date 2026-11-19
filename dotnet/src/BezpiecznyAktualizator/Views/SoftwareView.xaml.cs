@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using BezpiecznyAktualizator.Core.Agent;
 using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Catalogs;
 using BezpiecznyAktualizator.Core.History;
@@ -799,6 +800,52 @@ public partial class SoftwareView : UserControl
         await CheckUpdatesAsync();
     }
 
+    private async void AskAgent_Click(object sender, RoutedEventArgs e)
+    {
+        var agent = Settings.LocalAgent;
+        if (!agent.Enabled || agent.Model.Length == 0)
+        {
+            Ui.Info(this, L.T("Lokalny agent AI"), L.T("Najpierw włącz lokalnego agenta AI i wybierz model."));
+            new LocalAgentWindow { Owner = Window.GetWindow(this) }.ShowDialog();
+            agent = Settings.LocalAgent;
+            if (!agent.Enabled || agent.Model.Length == 0) return;
+        }
+        ApplyPolicies();
+        var targets = _items.Where(s => s.CanUpgrade && !s.PolicyBlocked && !SilentUpdatePolicy.IsStoreManaged(s))
+                            .Take(LocalAgentClient.MaxCandidates).ToList();
+        if (targets.Count == 0)
+        {
+            Ui.Info(this, L.T("Brak aktualizacji"), L.T("Brak programów z dostępną aktualizacją."));
+            return;
+        }
+
+        var approved = new List<Software>();
+        var ok = await _runner.RunIndependentCancellableAsync(LogEvent.Agent,
+            L.F("Lokalny agent AI ({0}) ocenia aktualizacje: {1}.", agent.Model, targets.Count), async ct =>
+        {
+            var review = await LocalAgentClient.ReviewAsync(agent, targets.Select(LocalAgentCandidate.From).ToList(), ct);
+            foreach (var s in targets)
+            {
+                var install = review.Approves(s.WingetId);
+                if (install) approved.Add(s);
+                var label = $"{s.Name} {s.Version} → {s.AvailableVersion}";
+                var reason = review.ReasonFor(s.WingetId);
+                _runner.Log(install ? L.F("Agent AI zatwierdził {0}: {1}", label, reason)
+                                    : L.F("Agent AI odłożył {0}: {1}", label, reason), msgId: LogEvent.Agent);
+            }
+        }, typeof(LocalAgentException));
+        if (!ok) return;
+
+        OnlyUpdates.IsChecked = true;
+        RefreshTable();
+        Restore(approved);
+        if (approved.Count > 0) Table.ScrollIntoView(approved[0]);
+        Ui.Info(this, L.T("Lokalny agent AI"), approved.Count == 0
+            ? L.T("Agent nie zalecił teraz żadnej aktualizacji. Uzasadnienia są w dzienniku.")
+            : L.F("Agent zalecił {0} z {1} aktualizacji i zaznaczył je na liście. Sprawdź wybór i kliknij „Aktualizuj zaznaczone”.",
+                  approved.Count, targets.Count));
+    }
+
     private async void Upgrade_Click(object sender, RoutedEventArgs e)
     {
         var selected = RequireSelection();
@@ -906,7 +953,8 @@ public partial class SoftwareView : UserControl
                 var sha256 = "";
                 if (verifyChecksums)
                 {
-                    verifiedInstaller = await VerifyInstallerAsync(s.Name, s.WingetId!, s.WingetSource, version);
+                    verifiedInstaller = await VerifyInstallerAsync(s.Name, s.WingetId!, s.WingetSource, version,
+                        s.InstalledInstallerType);
                     if (verifiedInstaller is null)
                     {
                         blocked.Add(s);
@@ -1009,13 +1057,14 @@ public partial class SoftwareView : UserControl
     /// Weryfikuje instalator przed instalacją. Zwraca wersję do zainstalowania ("" = bez przypinania) i SHA256
     /// albo null, gdy instalacja ma zostać wstrzymana.
     /// </summary>
-    private async Task<VerifiedInstaller?> VerifyInstallerAsync(string name, string wingetId, string source, string version = "")
+    private async Task<VerifiedInstaller?> VerifyInstallerAsync(string name, string wingetId, string source, string version = "",
+                                                               string installedInstallerType = "")
     {
-        await WingetClient.EnsureLocalManifestFilesEnabledAsync();
+        if (!await EnsureLocalManifestFilesEnabledAsync()) return null;
         _runner.Log(L.F("Weryfikacja plików kontrolnych: {0} ({1})...", name, wingetId), SyslogSeverity.Informational, LogEvent.Verify);
         var result = await InstallerVerifier.VerifyAsync(wingetId, source,
                                                          text => Dispatcher.BeginInvoke(() => _runner.SetStatus($"{name}: {text}")),
-                                                         version: version);
+                                                         version: version, installedInstallerType: installedInstallerType);
         foreach (var c in result.Checks)
         {
             var (icon, severity) = c.Status switch
@@ -1068,6 +1117,7 @@ public partial class SoftwareView : UserControl
                             SyslogSeverity.Notice, LogEvent.Verify);
             return result.VerifiedInstaller;
         }
+
         var reason = result.Error?.ToString() ?? "";
         _runner.Log(L.F("Nie udało się zweryfikować instalatora {0}: {1}", name, reason), SyslogSeverity.Warning, LogEvent.Verify);
         Ui.Warn(this, L.T("Weryfikacja plików kontrolnych"),
@@ -1076,6 +1126,24 @@ public partial class SoftwareView : UserControl
             L.T("Aby pominąć dodatkową weryfikację, wyłącz ją świadomie w ustawieniach i zaakceptuj ostrzeżenie."));
         result.VerifiedInstaller?.Dispose();
         return null;
+    }
+
+    private async Task<bool> EnsureLocalManifestFilesEnabledAsync()
+    {
+        if (await WingetClient.IsLocalManifestFilesEnabledAsync()) return true;
+        if (!Ui.Confirm(this, L.T("Weryfikacja plików kontrolnych"),
+                L.T("WinGet wymaga LocalManifestFiles, aby użyć lokalnego manifestu, który aplikacja pobrała i zweryfikowała. Włączenie tej opcji zmienia ustawienia WinGet dla całego konta i wymaga zgody administratora (UAC). Aplikacja uruchomi wyłącznie polecenie „winget settings --enable LocalManifestFiles”, a następnie ponownie sprawdzi ustawienie. Nie rozpocznie instalacji, jeśli weryfikacja się nie powiedzie. Kontynuować?"),
+                warning: true))
+        {
+            _runner.Log(L.T("Przerwano, ponieważ LocalManifestFiles pozostało wyłączone."),
+                SyslogSeverity.Notice, LogEvent.Verify);
+            return false;
+        }
+
+        await WingetClient.EnableLocalManifestFilesElevatedAsync();
+        _runner.Log(L.T("Włączono LocalManifestFiles w WinGet; ustawienie zostało zweryfikowane."),
+            SyslogSeverity.Notice, LogEvent.Verify);
+        return true;
     }
 
     /// <summary>Wyłączenie weryfikacji wyłącza też skanowanie Defender, dlatego wymaga wyraźnego potwierdzenia.</summary>

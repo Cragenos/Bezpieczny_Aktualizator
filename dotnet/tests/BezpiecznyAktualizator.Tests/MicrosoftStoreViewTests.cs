@@ -23,7 +23,11 @@ public class MicrosoftStoreViewTests
                 app.InitializeComponent();
                 var window = new MainWindow();
                 var tabs = Assert.IsType<TabControl>(window.FindName("Tabs"));
-                Assert.Equal(4, tabs.Items.Count);
+                Assert.Equal(5, tabs.Items.Count);
+                var profileView = Assert.IsType<ProfileBackupView>(Assert.IsType<TabItem>(tabs.Items[4]).Content);
+                Assert.IsType<ComboBox>(profileView.FindName("SourceUser"));
+                Assert.IsType<PasswordBox>(profileView.FindName("CreatePassword"));
+                Assert.IsType<ComboBox>(profileView.FindName("ConflictBox"));
                 var softwareTab = Assert.IsType<TabItem>(tabs.Items[0]);
                 var softwareView = Assert.IsType<SoftwareView>(softwareTab.Content);
                 var antivirus = Assert.IsType<Button>(softwareView.FindName("AntivirusButton"));

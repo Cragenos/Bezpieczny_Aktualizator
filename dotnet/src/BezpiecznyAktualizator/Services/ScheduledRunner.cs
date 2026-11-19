@@ -1,11 +1,13 @@
 using System.Net.Http;
 using System.Security.Principal;
+using BezpiecznyAktualizator.Core.Agent;
 using BezpiecznyAktualizator.Core.Backup;
 using BezpiecznyAktualizator.Core.Drivers;
 using BezpiecznyAktualizator.Core.History;
 using BezpiecznyAktualizator.Core.Inventory;
 using BezpiecznyAktualizator.Core.Localization;
 using BezpiecznyAktualizator.Core.Logging;
+using BezpiecznyAktualizator.Core.Models;
 using BezpiecznyAktualizator.Core.Policies;
 using BezpiecznyAktualizator.Core.Scheduling;
 using BezpiecznyAktualizator.Core.Security;
@@ -104,17 +106,61 @@ public static class ScheduledRunner
 
     internal static int GetExitCode(ScheduleState state) => state.HasErrors ? 1 : 0;
 
+    internal delegate Task<LocalAgentReview> AgentReviewer(LocalAgentOptions options, IReadOnlyList<LocalAgentCandidate> candidates);
+
+    /// <summary>
+    /// Pozostawia tylko pakiety zatwierdzone przez lokalnego agenta AI. Gdy agent jest niedostępny lub odpowiada
+    /// nieprawidłowo, ciche instalacje programów są pomijane (agent nigdy nie dodaje pakietów do listy).
+    /// </summary>
+    internal static async Task<List<Software>> ApplyAgentReviewAsync(LocalAgentOptions agent, List<Software> candidates,
+                                                                     ScheduleState result, AgentReviewer? reviewer = null)
+    {
+        reviewer ??= (options, items) => LocalAgentClient.ReviewAsync(options, items);
+        static string Label(Software s) => $"{s.Name} {s.Version} → {s.AvailableVersion}";
+        var batch = candidates.Take(LocalAgentClient.MaxCandidates).ToList();
+        Syslog.Info(LogEvent.Agent, L.F("Lokalny agent AI ({0}) ocenia aktualizacje: {1}.", agent.Model, batch.Count));
+        LocalAgentReview review;
+        try
+        {
+            review = await reviewer(agent, batch.Select(LocalAgentCandidate.From).ToList());
+        }
+        catch (LocalAgentException ex)
+        {
+            result.SkipReason = L.F("lokalny agent AI jest niedostępny: {0}", ex.Message);
+            result.Skipped.AddRange(candidates.Select(Label));
+            Syslog.Warning(LogEvent.Agent, L.F("Pominięto ciche instalacje: {0}", result.SkipReason));
+            return [];
+        }
+
+        var approved = new List<Software>();
+        foreach (var s in candidates)
+        {
+            if (batch.Contains(s) && review.Approves(s.WingetId))
+            {
+                approved.Add(s);
+                Syslog.Notice(LogEvent.Agent, L.F("Agent AI zatwierdził {0}: {1}", Label(s), review.ReasonFor(s.WingetId)));
+            }
+            else
+            {
+                result.Skipped.Add(Label(s));
+                Syslog.Notice(LogEvent.Agent, L.F("Agent AI odłożył {0}: {1}", Label(s), review.ReasonFor(s.WingetId)));
+            }
+        }
+        return approved;
+    }
+
     /// <summary>
     /// Punkt przywracania przed pierwszą cichą instalacją w przebiegu. Zwraca powód pominięcia instalacji,
     /// gdy kopii nie udało się utworzyć (bez kopii ciche instalacje nie są wykonywane).
     /// </summary>
-    internal static string? EnsureBackup(RestorePointGate? gate)
+    internal static string? EnsureBackup(RestorePointGate? gate, ScheduleState? result = null)
     {
         if (gate is null) return null;
         var first = !gate.Attempted;
         var backup = gate.Ensure();
         if (first)
             Syslog.Write(backup.Succeeded ? SyslogSeverity.Notice : SyslogSeverity.Warning, LogEvent.Backup, backup.Detail);
+        if (!backup.Succeeded && result is not null) result.BackupFailed = true;
         return backup.Succeeded ? null : L.F("brak punktu przywracania systemu: {0}", backup.Detail);
     }
 
@@ -194,7 +240,7 @@ public static class ScheduledRunner
 
                 var constraintSkip = GetInstallationConstraintSkip(options, DateTimeOffset.Now,
                     SystemConditions.IsOnAcPower, SystemConditions.CurrentNetworkCost);
-                constraintSkip ??= await Task.Run(() => EnsureBackup(backup));
+                constraintSkip ??= await Task.Run(() => EnsureBackup(backup, result));
                 if (constraintSkip is not null)
                 {
                     result.SkipReason = constraintSkip;
@@ -273,6 +319,10 @@ public static class ScheduledRunner
                 Syslog.Info(LogEvent.Policy, L.F("Pominięto {0}: {1}", s.Name, rule.Reason.ToString()));
         }
         if (!install) return;
+        if (candidates.Count > 0 && Settings.LocalAgent is { Enabled: true, ReviewScheduledUpdates: true } agent)
+        {
+            candidates = await ApplyAgentReviewAsync(agent, candidates, result);
+        }
         if (candidates.Count > 0)
         {
             try { await WingetClient.EnsureLocalManifestFilesEnabledAsync(); }
@@ -335,7 +385,8 @@ public static class ScheduledRunner
                 continue;
             }
 
-            var verification = await InstallerVerifier.VerifyAsync(s.WingetId!, s.WingetSource, version: s.AvailableVersion);
+            var verification = await InstallerVerifier.VerifyAsync(s.WingetId!, s.WingetSource, version: s.AvailableVersion,
+                installedInstallerType: s.InstalledInstallerType);
             using var verifiedInstaller = verification.VerifiedInstaller;
             foreach (var c in verification.Checks.Where(c => c.Status != CheckStatus.Ok))
                 Syslog.Warning(LogEvent.Verify, $"{s.Name}: {c.Label}: {c.Detail}");
@@ -399,7 +450,7 @@ public static class ScheduledRunner
                 }
                 var constraintSkip = GetInstallationConstraintSkip(options, DateTimeOffset.Now,
                     SystemConditions.IsOnAcPower, SystemConditions.CurrentNetworkCost);
-                constraintSkip ??= await Task.Run(() => EnsureBackup(backup));
+                constraintSkip ??= await Task.Run(() => EnsureBackup(backup, result));
                 if (constraintSkip is not null)
                 {
                     result.SkipReason = constraintSkip;
@@ -463,7 +514,7 @@ public static class ScheduledRunner
                 return;
             }
             var constraintSkip = GetInstallationConstraintSkip(options, DateTimeOffset.Now,
-                SystemConditions.IsOnAcPower, SystemConditions.CurrentNetworkCost) ?? EnsureBackup(backup);
+                SystemConditions.IsOnAcPower, SystemConditions.CurrentNetworkCost) ?? EnsureBackup(backup, result);
             if (constraintSkip is not null)
             {
                 result.SkipReason = constraintSkip;
